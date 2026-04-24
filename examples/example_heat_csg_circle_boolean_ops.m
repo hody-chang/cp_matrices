@@ -34,7 +34,7 @@ op_names = {'union', 'intersection', 'difference'};
 
 
 %% Construct the embedding grid
-dx = 0.01;
+dx = 0.004;
 x1d = (-2.2:dx:2.2)';
 y1d = (-1.8:dx:1.8)';
 [xx, yy] = meshgrid(x1d, y1d);
