@@ -18,22 +18,28 @@ function results = example_v_shaped_manifold_heat_refinement(opts)
   addpathIfNeeded(fullfile(repoRoot, 'surfaces'));
 
   anglesDeg = optionValue(opts, 'anglesDeg', [90 120 150 170]);
-  hvals = optionValue(opts, 'hvals', 1 ./ [400 800 1000 1200 1600]);
+  hvals = optionValue(opts, 'hvals', 1 ./ [400 800 1200]);
   finalTime = optionValue(opts, 'finalTime', 0.01);
   cfl = optionValue(opts, 'cfl', 0.2);
   interpDegree = optionValue(opts, 'interpDegree', 3);
   lapOrder = optionValue(opts, 'lapOrder', 2);
-  couplingMode = optionValue(opts, 'couplingMode', 'vertex');
-  exactMode = optionValue(opts, 'exactMode', 'hotCold');
+  couplingMode = optionValue(opts, 'couplingMode', 'reflectedGhost');
+  exactMode = optionValue(opts, 'exactMode', 'rightThree');
   vertexTol = optionValue(opts, 'vertexTol', 0);
   makePlots = optionValue(opts, 'makePlots', true);
   xyFigNum = optionValue(opts, 'xyFigNum', 1);
   convFigNum = optionValue(opts, 'convFigNum', 2);
+  ownershipFigNum = optionValue(opts, 'ownershipFigNum', 3);
+  showBranchOwnership = optionValue(opts, 'showBranchOwnership', true);
+  ownershipAngleDeg = optionValue(opts, 'ownershipAngleDeg', 150);
+  ownershipH = optionValue(opts, 'ownershipH', 1/120);
 
   dim = 2;
   padding = 0.18;
   sSample = linspace(-1, 1, 8001)';
 
+  absGlobalInf = zeros(length(anglesDeg), length(hvals));
+  absGlobalL2 = zeros(size(absGlobalInf));
   errGlobalInf = zeros(length(anglesDeg), length(hvals));
   errGlobalL2 = zeros(size(errGlobalInf));
   rateGlobalInf = NaN(size(errGlobalInf));
@@ -61,12 +67,15 @@ function results = example_v_shaped_manifold_heat_refinement(opts)
       exactGlobalInf = max(abs(exactSample));
       exactGlobalL2 = sqrt(mean(exactSample.^2));
 
-      errGlobalInf(ia, ih) = max(sampleError) / exactGlobalInf;
-      errGlobalL2(ia, ih) = sqrt(mean(sampleError.^2)) / exactGlobalL2;
+      absGlobalInf(ia, ih) = max(sampleError);
+      absGlobalL2(ia, ih) = sqrt(mean(sampleError.^2));
+      errGlobalInf(ia, ih) = absGlobalInf(ia, ih) / exactGlobalInf;
+      errGlobalL2(ia, ih) = absGlobalL2(ia, ih) / exactGlobalL2;
 
       if ih > 1
         rateGlobalInf(ia, ih) = log(errGlobalInf(ia, ih-1) / ...
-                                    errGlobalInf(ia, ih))/log(2);
+                                    errGlobalInf(ia, ih)) / ...
+                                log(hvals(ih-1) / hvals(ih));
       end
 
       if ih == length(hvals)
@@ -88,8 +97,12 @@ function results = example_v_shaped_manifold_heat_refinement(opts)
 
   if makePlots
     plotXYPlanes(xyFigNum, xyPlots, interpDegree, couplingMode);
-    plotConvergence(convFigNum, anglesDeg, hvals, errGlobalInf, ...
-                    rateGlobalInf, interpDegree, couplingMode, exactMode);
+    plotConvergence(convFigNum, anglesDeg, hvals, absGlobalInf, ...
+                    absGlobalL2, interpDegree, couplingMode, exactMode);
+    if showBranchOwnership
+      plotBranchOwnership(ownershipFigNum, ownershipAngleDeg, ownershipH, ...
+                          interpDegree, lapOrder, padding);
+    end
   end
 end
 
@@ -100,6 +113,13 @@ function [uSample, branchPlot, nsteps] = solveBranchAwareLevel( ...
 
   if isVertexCoupled(couplingMode)
     [uSample, branchPlot, nsteps] = solveVertexCoupledLevel( ...
+        m, h, sSample, finalTime, cfl, interpDegree, lapOrder, bw, ...
+        padding, exactMode, vertexTol);
+    return;
+  end
+
+  if isReflectedGhostCoupled(couplingMode)
+    [uSample, branchPlot, nsteps] = solveReflectedGhostLevel( ...
         m, h, sSample, finalTime, cfl, interpDegree, lapOrder, bw, ...
         padding, exactMode, vertexTol);
     return;
@@ -179,6 +199,60 @@ function [uSample, branchPlot, nsteps] = solveVertexCoupledLevel( ...
   branchPlot.errBand = [errLeftBand; errRightBand];
 end
 
+function [uSample, branchPlot, nsteps] = solveReflectedGhostLevel( ...
+    m, h, sSample, finalTime, cfl, interpDegree, lapOrder, bw, padding, ...
+    exactMode, vertexTol)
+%SOLVEREFLECTEDGHOSTLEVEL Use reflected edge ghost values from the other arm.
+
+  leftMask = sSample <= 0;
+  rightMask = sSample >= 0;
+  uSample = zeros(size(sSample));
+
+  left = buildOneBranch(-1, m, h, sSample(leftMask), interpDegree, ...
+                        lapOrder, bw, padding, vertexTol);
+  right = buildOneBranch(1, m, h, sSample(rightMask), interpDegree, ...
+                         lapOrder, bw, padding, vertexTol);
+  [left, right] = addReflectedGhostMaps(left, right, interpDegree);
+
+  dt = cfl*h^2;
+  nsteps = ceil(finalTime/dt);
+  dt = finalTime/nsteps;
+
+  uLeft = exactSolution(left.sBand, 0, m, exactMode);
+  uRight = exactSolution(right.sBand, 0, m, exactMode);
+  [uLeft, uRight] = coupleVertexValues(uLeft, uRight, ...
+                                       left.vertexMask, right.vertexMask);
+  [uLeft, uRight] = applyReflectedGhostValues(uLeft, uRight, left, right);
+
+  for kt = 1:nsteps
+    uLeft = uLeft + dt*(left.L*uLeft);
+    uRight = uRight + dt*(right.L*uRight);
+
+    uLeft = left.E*uLeft;
+    uRight = right.E*uRight;
+    [uLeft, uRight] = coupleVertexValues(uLeft, uRight, ...
+                                         left.vertexMask, right.vertexMask);
+    [uLeft, uRight] = applyReflectedGhostValues(uLeft, uRight, left, right);
+  end
+
+  uLeftPlot = left.Eplot*uLeft;
+  uRightPlot = right.Eplot*uRight;
+  [uLeftPlot, uRightPlot] = coupleSampleVertexValues( ...
+      uLeftPlot, uRightPlot, sSample(leftMask), sSample(rightMask));
+
+  uSample(leftMask) = uLeftPlot;
+  uSample(rightMask) = uRightPlot;
+
+  errLeftBand = abs(uLeft - exactSolution(left.sBand, finalTime, ...
+                                          m, exactMode));
+  errRightBand = abs(uRight - exactSolution(right.sBand, finalTime, ...
+                                            m, exactMode));
+
+  branchPlot.xBand = [left.xBand; right.xBand];
+  branchPlot.yBand = [left.yBand; right.yBand];
+  branchPlot.errBand = [errLeftBand; errRightBand];
+end
+
 function [uPlot, branchPlot, nsteps] = solveOneBranch( ...
     side, m, h, sPlot, finalTime, cfl, interpDegree, lapOrder, bw, ...
     padding, exactMode, vertexTol)
@@ -221,11 +295,12 @@ function branch = buildOneBranch( ...
 
   y1d = (-padding:h:m+padding)';
   [xx, yy] = meshgrid(x1d, y1d);
-  [cpx, cpy, dist, bdy, t] = cpLineSegment2d(xx, yy, p0, p1); %#ok<ASGLU>
+  [cpx, cpy, dist, bdy, t] = cpLineSegment2d(xx, yy, p0, p1);
   band = find(abs(dist) <= bw*h);
 
   cpxBand = cpx(band);
   cpyBand = cpy(band);
+  bdyBand = bdy(band);
   sBand = branchParameter(side, t(band));
   xBand = xx(band);
   yBand = yy(band);
@@ -238,10 +313,86 @@ function branch = buildOneBranch( ...
                             interpDegree, band);
   branch.L = laplacian_2d_matrix(x1d, y1d, lapOrder, band, band);
   branch.Eplot = Eplot;
+  branch.side = side;
+  branch.p0 = p0;
+  branch.p1 = p1;
+  branch.x1d = x1d;
+  branch.y1d = y1d;
+  branch.band = band;
+  branch.cpxBand = cpxBand;
+  branch.cpyBand = cpyBand;
+  branch.bdyBand = bdyBand;
   branch.sBand = sBand;
   branch.xBand = xBand;
   branch.yBand = yBand;
   branch.vertexMask = makeVertexMask(cpxBand, cpyBand, sBand, h, vertexTol);
+  branch.sharedGhostMask = makeSharedGhostMask(side, bdyBand);
+end
+
+function mask = makeSharedGhostMask(side, bdyBand)
+%MAKESHAREDGHOSTMASK Select branch-edge ghosts at the shared vertex.
+
+  if side < 0
+    mask = bdyBand == 2;
+  else
+    mask = bdyBand == 1;
+  end
+end
+
+function [left, right] = addReflectedGhostMaps(left, right, interpDegree)
+%ADDREFLECTEDGHOSTMAPS Build direct-or-reflected cross-branch ghost maps.
+
+  left = addReflectedGhostMap(left, right, interpDegree);
+  right = addReflectedGhostMap(right, left, interpDegree);
+end
+
+function branch = addReflectedGhostMap(branch, other, interpDegree)
+%ADDREFLECTEDGHOSTMAP Map ghost points to values on the other branch.
+
+  ghostMask = branch.sharedGhostMask;
+  if any(ghostMask)
+    ghostX = branch.xBand(ghostMask);
+    ghostY = branch.yBand(ghostMask);
+    [targetX, targetY, tilde, targetBdy] = ...
+        cpLineSegment2d(ghostX, ghostY, other.p0, other.p1); %#ok<ASGLU>
+
+    useReflected = targetBdy ~= 0;
+    if any(useReflected)
+      ownCpX = branch.cpxBand(ghostMask);
+      ownCpY = branch.cpyBand(ghostMask);
+      tempX = ownCpX(useReflected) + ...
+              (ownCpX(useReflected) - ghostX(useReflected));
+      tempY = ownCpY(useReflected) + ...
+              (ownCpY(useReflected) - ghostY(useReflected));
+      [targetX(useReflected), targetY(useReflected)] = ...
+          cpLineSegment2d(tempX, tempY, other.p0, other.p1);
+    end
+
+    branch.ghostFromOther = interp2_matrix(other.x1d, other.y1d, ...
+                                           targetX, targetY, interpDegree, ...
+                                           other.band);
+    branch.ghostUsesDirectCp = ~useReflected;
+    branch.ghostUsesReflectedCp = useReflected;
+  else
+    branch.ghostFromOther = sparse(0, length(other.band));
+    branch.ghostUsesDirectCp = false(0, 1);
+    branch.ghostUsesReflectedCp = false(0, 1);
+  end
+end
+
+function [uLeft, uRight] = applyReflectedGhostValues( ...
+    uLeft, uRight, left, right)
+%APPLYREFLECTEDGHOSTVALUES Fill edge ghosts from opposite-branch cp values.
+
+  oldLeft = uLeft;
+  oldRight = uRight;
+
+  if any(left.sharedGhostMask)
+    uLeft(left.sharedGhostMask) = left.ghostFromOther * oldRight;
+  end
+  if any(right.sharedGhostMask)
+    uRight(right.sharedGhostMask) = right.ghostFromOther * oldLeft;
+  end
 end
 
 function mask = makeVertexMask(cpxBand, cpyBand, sBand, h, vertexTol)
@@ -299,6 +450,14 @@ function tf = isVertexCoupled(couplingMode)
        strcmp(mode, 'coupled');
 end
 
+function tf = isReflectedGhostCoupled(couplingMode)
+%ISREFLECTEDGHOSTCOUPLED True for reflected cross-branch ghost values.
+
+  mode = lower(couplingMode);
+  tf = strcmp(mode, 'reflectedghost') || strcmp(mode, 'edgeghost') || ...
+       strcmp(mode, 'crossghost') || strcmp(mode, 'ghost');
+end
+
 function s = branchParameter(side, t)
 %BRANCHPARAMETER Convert cpLineSegment2d parameter to the global V parameter.
 
@@ -313,7 +472,10 @@ function u = exactSolution(s, t, m, exactMode)
 %EXACTSOLUTION Manufactured heat-equation solution on Gamma_alpha.
 
   mode = lower(exactMode);
-  if strcmp(mode, 'hotcold') || strcmp(mode, 'connectedfirst') || ...
+  if strcmp(mode, 'rightthree') || strcmp(mode, 'endpointthree')
+    lambda = (pi/2)^2/(1 + m^2);
+    u = 2 + exp(-lambda*t).*sin(0.5*pi*s);
+  elseif strcmp(mode, 'hotcold') || strcmp(mode, 'connectedfirst') || ...
      strcmp(mode, 'connected')
     lambda = (pi/2)^2/(1 + m^2);
     u = 0.5 - 0.5*exp(-lambda*t).*sin(0.5*pi*s);
@@ -441,6 +603,104 @@ function plotXYPlanes(figNum, xyPlots, interpDegree, couplingMode)
   end
 end
 
+function plotBranchOwnership(figNum, alphaDeg, h, interpDegree, lapOrder, padding)
+%PLOTBRANCHOWNERSHIP Show which branch-local band owns each grid point.
+
+  dim = 2;
+  m = tan(alphaDeg*pi/360);
+  bw = 1.0001*sqrt((dim-1)*((interpDegree+1)/2)^2 + ...
+                   ((lapOrder/2+(interpDegree+1)/2)^2));
+
+  left = branchOwnershipBand(-1, m, h, bw, padding);
+  right = branchOwnershipBand(1, m, h, bw, padding);
+  [leftOnly, rightOnly, both] = splitBranchOwnership(left, right, h);
+
+  figure(figNum);
+  clf;
+  set(gcf, 'color', 'w');
+  set(gcf, 'Position', [130, 130, 1120, 760]);
+
+  hLeft = scatter(leftOnly.x, leftOnly.y, 20, [0.10 0.35 0.85], ...
+                  'filled', 'MarkerFaceAlpha', 0.70, ...
+                  'MarkerEdgeColor', 'none');
+  hold on;
+  hRight = scatter(rightOnly.x, rightOnly.y, 20, [0.90 0.30 0.12], ...
+                   'filled', 'MarkerFaceAlpha', 0.70, ...
+                   'MarkerEdgeColor', 'none');
+  hBoth = scatter(both.x, both.y, 28, [0.45 0.18 0.65], ...
+                  'filled', 'MarkerFaceAlpha', 0.85, ...
+                  'MarkerEdgeColor', 'none');
+  hCurve = plot([-1 0 1], [m 0 m], 'k-', 'LineWidth', 2.1);
+  hVertex = plot(0, 0, 'ko', 'MarkerSize', 7, ...
+                 'MarkerFaceColor', 'w', 'LineWidth', 1.2);
+  hold off;
+
+  allX = [left.x; right.x];
+  allY = [left.y; right.y];
+  axis equal;
+  grid on;
+  box on;
+  xlim([min(allX)-0.05, max(allX)+0.05]);
+  ylim([min(allY)-0.05, max(allY)+0.08]);
+  xlabel('x');
+  ylabel('y');
+  title(sprintf('Branch-local band ownership, \\alpha = %d^\\circ, h = %.4g', ...
+                alphaDeg, h));
+  legend([hLeft, hRight, hBoth, hCurve, hVertex], ...
+         {'left branch only', 'right branch only', 'both branch bands', ...
+          'V manifold', 'shared vertex'}, ...
+         'Location', 'northoutside', 'Orientation', 'horizontal');
+  set(gca, 'FontSize', 12, 'LineWidth', 1, 'Layer', 'top');
+end
+
+function data = branchOwnershipBand(side, m, h, bw, padding)
+%BRANCHOWNERSHIPBAND Build one branch-local band for diagnostics.
+
+  if side < 0
+    p0 = [-1, m];
+    p1 = [0, 0];
+    x1d = (-1-padding:h:padding)';
+  else
+    p0 = [0, 0];
+    p1 = [1, m];
+    x1d = (-padding:h:1+padding)';
+  end
+
+  y1d = (-padding:h:m+padding)';
+  [xx, yy] = meshgrid(x1d, y1d);
+  [tilde, tilde, dist] = cpLineSegment2d(xx, yy, p0, p1); %#ok<ASGLU>
+  band = find(abs(dist) <= bw*h);
+
+  data.x = xx(band);
+  data.y = yy(band);
+end
+
+function [leftOnly, rightOnly, both] = splitBranchOwnership(left, right, h)
+%SPLITBRANCHOWNERSHIP Separate unique and overlapping branch-band points.
+
+  leftKeys = branchOwnershipKeys(left.x, left.y, h);
+  rightKeys = branchOwnershipKeys(right.x, right.y, h);
+  [tilde, leftBothIdx, rightBothIdx] = intersect(leftKeys, rightKeys, 'rows'); %#ok<ASGLU>
+
+  leftBothMask = false(size(left.x));
+  rightBothMask = false(size(right.x));
+  leftBothMask(leftBothIdx) = true;
+  rightBothMask(rightBothIdx) = true;
+
+  leftOnly.x = left.x(~leftBothMask);
+  leftOnly.y = left.y(~leftBothMask);
+  rightOnly.x = right.x(~rightBothMask);
+  rightOnly.y = right.y(~rightBothMask);
+  both.x = left.x(leftBothMask);
+  both.y = left.y(leftBothMask);
+end
+
+function keys = branchOwnershipKeys(x, y, h)
+%BRANCHOWNERSHIPKEYS Make stable integer keys for Cartesian grid points.
+
+  keys = round([x(:), y(:)] / h);
+end
+
 function positions = panelPositions(nPanels)
 %PANELPOSITIONS Return uniform axes positions, centering a short last row.
 
@@ -467,105 +727,43 @@ function positions = panelPositions(nPanels)
   end
 end
 
-function plotConvergence(figNum, anglesDeg, hvals, errGlobalInf, ...
-                         rateGlobalInf, interpDegree, couplingMode, exactMode)
-%PLOTCONVERGENCE Show relative errors and observed rates.
+function plotConvergence(figNum, anglesDeg, hvals, absGlobalInf, ...
+                         absGlobalL2, interpDegree, couplingMode, exactMode)
+%PLOTCONVERGENCE Show absolute-error convergence curves.
 
   figure(figNum);
   clf;
   set(gcf, 'color', 'w');
-  set(gcf, 'Position', [120, 120, 1180, 470]);
-  markers = {'o-', 's-', 'd-', '^-', 'v-'};
+  set(gcf, 'Position', [120, 120, 1180, 640]);
   colors = lines(length(anglesDeg));
-  angleLabels = cell(length(anglesDeg), 1);
+  positions = panelPositions(length(anglesDeg));
+
   for ia = 1:length(anglesDeg)
-    angleLabels{ia} = sprintf('%d^\\circ', anglesDeg(ia));
+    axes('Position', positions(ia, :)); %#ok<LAXES>
+    loglog(hvals, absGlobalInf(ia, :), 'o-', ...
+           'LineWidth', 1.5, 'MarkerSize', 7, 'Color', colors(ia, :));
+    hold on;
+    loglog(hvals, absGlobalL2(ia, :), 's--', ...
+           'LineWidth', 1.4, 'MarkerSize', 7, 'Color', colors(ia, :));
+    ref = absGlobalInf(ia, 1) * hvals ./ hvals(1);
+    loglog(hvals, ref, 'w:', 'LineWidth', 1.8);
+    hold off;
+
+    set(gca, 'XDir', 'reverse', 'FontSize', 9, ...
+             'LineWidth', 0.8, 'Layer', 'top');
+    grid on;
+    box on;
+    xlabel('h');
+    ylabel('absolute error');
+    title(sprintf('\\alpha = %d^\\circ', anglesDeg(ia)));
+    legend({'E_{\infty}', 'E_2', 'O(h)'}, 'Location', 'southwest');
   end
-
-  axErr = subplot(1, 2, 1);
-  hold on;
-  errHandles = cell(length(anglesDeg), 1);
-  for ia = 1:length(anglesDeg)
-    marker = markers{mod(ia-1, length(markers)) + 1};
-    errHandles{ia} = loglog(hvals, errGlobalInf(ia, :), marker, ...
-           'LineWidth', 1.5, 'MarkerSize', 7, ...
-           'Color', colors(ia, :), 'DisplayName', angleLabels{ia});
-  end
-  hold off;
-
-  set(gca, 'XDir', 'reverse');
-  grid on;
-  xlabel('h');
-  ylabel('relative E_{\infty}');
-  title('Relative error');
-  legend(axErr, [errHandles{:}], angleLabels, 'Location', 'southwest');
-
-  axRate = subplot(1, 2, 2);
-  hold on;
-  rateHvals = hvals(2:end);
-  rateHandles = cell(length(anglesDeg), 1);
-  for ia = 1:length(anglesDeg)
-    marker = markers{mod(ia-1, length(markers)) + 1};
-    rateHandles{ia} = semilogx(rateHvals, rateGlobalInf(ia, 2:end), ...
-        marker, 'LineWidth', 1.5, 'MarkerSize', 7, ...
-        'Color', colors(ia, :), 'DisplayName', angleLabels{ia});
-  end
-  hLimits = hAxisLimits(rateHvals);
-  refHandle = semilogx(hLimits, [1, 1], 'k--', ...
-       'LineWidth', 1.2, 'DisplayName', 'p = 1');
-  hold off;
-
-  grid on;
-  set(gca, 'XDir', 'reverse');
-  xlim(hLimits);
-  xlabel('h');
-  ylabel('observed rate p');
-  title('Observed convergence rate');
-  ylim(rateAxisLimits(rateGlobalInf(:, 2:end)));
-  legend(axRate, [[rateHandles{:}], refHandle], ...
-         [angleLabels; {'p = 1'}], 'Location', 'best');
 
   if exist('sgtitle', 'file') || exist('sgtitle', 'builtin')
     sgtitle(sprintf(['Heat convergence, coupling = %s, exact = %s, ' ...
                     'interpDegree = %d'], ...
                     couplingMode, exactMode, interpDegree));
   end
-end
-
-function limits = hAxisLimits(hvals)
-%HAXISLIMITS Choose x-limits for h-based plots.
-
-  validH = hvals(isfinite(hvals) & hvals > 0);
-  if isempty(validH)
-    limits = [0.5, 2];
-    return;
-  end
-
-  lower = min(validH);
-  upper = max(validH);
-  if lower == upper
-    limits = [lower/sqrt(2), upper*sqrt(2)];
-  else
-    limits = [lower/1.15, upper*1.15];
-  end
-end
-
-function limits = rateAxisLimits(rates)
-%RATEAXISLIMITS Choose readable y-limits for the observed-rate panel.
-
-  validRates = rates(isfinite(rates));
-  if isempty(validRates)
-    limits = [0, 2];
-    return;
-  end
-
-  lower = min([0.5; validRates(:); 1]);
-  upper = max([1.5; validRates(:); 1]);
-  pad = 0.08 * (upper - lower);
-  if pad == 0
-    pad = 0.1;
-  end
-  limits = [lower - pad, upper + pad];
 end
 
 function value = optionValue(opts, fieldName, defaultValue)

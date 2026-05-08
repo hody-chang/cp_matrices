@@ -251,14 +251,16 @@ $$
 Observed rates are computed from infinity-norm errors:
 
 $$
-p(h,\alpha)
+p(h_j,\alpha)
 =
 \frac{
-\log\left(E(h,\alpha) / E(h/2,\alpha)\right)
+\log\left(E(h_{j-1},\alpha) / E(h_j,\alpha)\right)
 }{
-\log 2
+\log\left(h_{j-1}/h_j\right)
 }.
 $$
+
+This formula does not assume that the refinement ratio is exactly \(2\).
 
 ## Output
 
@@ -290,30 +292,39 @@ y-limits are chosen separately for each angle.  This makes the near-vertical
 cases readable without letting the \(175^\circ\) y-range collapse the other
 panels.
 
-Figure 2 has two panels.  The left panel plots the relative global
-infinity-norm convergence curves for all opening angles using cubic
-interpolation.  The plotted error quantity is
+Figure 2 plots convergence curves in separate panels, one panel for each
+opening angle.  Each panel shows both the absolute global infinity-norm
+error
 
 $$
-E_{\mathrm{global,rel}}(h,\alpha).
+E_{\mathrm{global,abs}}(h,\alpha)
+:=
+\max_k
+\left|
+u_h\left(X_\alpha(s_k)\right)
+-
+u\left(X_\alpha(s_k),T\right)
+\right|.
 $$
 
-The right panel plots the observed convergence rates against grid spacing,
-using the same angle colors and legend as the left panel, with a horizontal
-reference line at
+and the absolute global sampled RMS-style error
 
 $$
-p = 1.
+E_{2,\mathrm{global,abs}}(h,\alpha)
+:=
+\sqrt{
+\operatorname{mean}
+\left(
+\left(
+u_h-u_{\mathrm{exact}}
+\right)^2
+\right)
+}.
 $$
 
-This separates the two effects in
-
-$$
-E(h,\alpha) \approx C(\alpha)h.
-$$
-
-The left panel shows the error constant \(C(\alpha)\), while the right
-panel shows whether each angle's observed order is close to first order.
+In every panel, circles mark \(E_{\infty,\mathrm{abs}}\), squares mark
+\(E_{2,\mathrm{global,abs}}\), and the white dotted line is the \(O(h)\)
+reference anchored at that angle's coarsest-grid infinity-norm error.
 
 ## Interpretation
 

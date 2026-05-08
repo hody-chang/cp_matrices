@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpmatrices-draft"
+version = "0.0.1"
+description = "Draft Python core for Closest Point Method sparse matrices"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
