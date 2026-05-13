@@ -1,4 +1,4 @@
-function [results, diagnostics] = example_v_shaped_manifold_heat_refinement_branch_cpm(opts)
+function [results, diagnostics] = example_v_shaped_heat_no_cp_bar(opts)
 %EXAMPLE_V_SHAPED_MANIFOLD_HEAT_REFINEMENT_BRANCH_CPM
 % Branch-aware CPM heat equation on a V-shaped two-branch manifold.
 %
@@ -28,7 +28,7 @@ function [results, diagnostics] = example_v_shaped_manifold_heat_refinement_bran
   addpathIfNeeded(fullfile(repoRoot, 'surfaces'));
 
   anglesDeg = optionValue(opts, 'anglesDeg', [90 120 150 170]);
-  hvals = optionValue(opts, 'hvals', 1 ./ [200 400 800 1600 3200]);
+  hvals = optionValue(opts, 'hvals', 1 ./ [200 400 800 1600]);
   finalTime = optionValue(opts, 'finalTime', 0.01);
   kappa = optionValue(opts, 'kappa', 1.0);
   cfl = optionValue(opts, 'cfl', 0.1);
