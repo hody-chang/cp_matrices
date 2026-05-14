@@ -41,7 +41,7 @@ function [results, diagnostics] = example_l_shaped_manifold_heat_refinement_angl
   addpathIfNeeded(fullfile(repoRoot, 'surfaces'));
 
   anglesDeg = 90;
-  hvals = optionValue(opts, 'hvals', 1 ./ [400 800 1600]);
+  hvals = optionValue(opts, 'hvals', 1 ./ [400 800 1600 3200]);
   finalTime = optionValue(opts, 'finalTime', 0.01);
   kappa = optionValue(opts, 'kappa', 1.0);
   cfl = optionValue(opts, 'cfl', 0.1);
