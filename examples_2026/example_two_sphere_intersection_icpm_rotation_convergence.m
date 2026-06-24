@@ -15,12 +15,13 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
 
   thisdir = fileparts(mfilename('fullpath'));
   repodir = fileparts(thisdir);
+  addpath(thisdir);
   addpath(fullfile(repodir, 'cp_matrices'));
   addpath(fullfile(repodir, 'surfaces'));
 
   R = getOption(opts, 'R', 1);
   a = getOption(opts, 'a', 0.5);
-  hvals = getOption(opts, 'hvals', 1./[20 40 80]);
+  hvals = getOption(opts, 'hvals', 1./[20 40 80 160 320]);
   p = getOption(opts, 'p', 3);
   order = getOption(opts, 'order', 2);
   makePlots = getOption(opts, 'makePlots', true);
@@ -48,6 +49,7 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
   end
 
   results.h = hvals;
+  results.N = 1 ./ hvals;
   results.errorsLinf = [levelResults.errorLinf];
   results.errorsL2 = [levelResults.errorL2];
   results.ratesLinf = convergenceRates(results.h, results.errorsLinf);
@@ -64,6 +66,10 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
 
   if (showDiagnostics)
     printConvergenceTable(results);
+  end
+
+  if (makePlots)
+    plotConvergenceSummary(results);
   end
 
 
@@ -333,9 +339,29 @@ function [rotatedPoints, theta] = rotateBranchPoints(points, singularPoints, R, 
     tau = normalizeRows(cross(nTo, nFrom, 2));
   end
 
-  etaFrom = capConormal(nFrom, fromSide);
+  etaFromProbe = capConormal(nFrom, fromSide);
   etaTo = capConormal(nTo, toSide);
-  theta = signedAngleAboutAxis(etaFrom, -etaTo, tau);
+  targetDirection = -etaTo;
+  theta = NaN(size(points, 1), 1);
+  cpfFrom = @(x, y, z) cpSphereCap(x, y, z, R, fromCenter, fromSide);
+
+  minProbeDistance = sqrt(eps)*max(1, R);
+  for k = 1:size(points, 1)
+    theta(k) = angle3D(points(k,1), points(k,2), points(k,3), cpfFrom, ...
+                       singularPoints(k,:), tau(k,:), targetDirection(k,:));
+
+    if (~isfinite(theta(k)))
+      probeDistance = max(norm(points(k,:) - singularPoints(k,:)), minProbeDistance);
+      probePoint = singularPoints(k,:) + probeDistance*etaFromProbe(k,:);
+      theta(k) = angle3D(probePoint(1), probePoint(2), probePoint(3), cpfFrom, ...
+                         singularPoints(k,:), tau(k,:), targetDirection(k,:));
+    end
+  end
+
+  if (any(~isfinite(theta)))
+    error('angle3D did not return finite branch rotation angles.');
+  end
+
   rotatedPoints = rotateAboutAxis(points, singularPoints, tau, theta);
 
 
@@ -344,15 +370,6 @@ function eta = capConormal(normal, side)
   capOut = [-side*ones(size(normal,1),1) zeros(size(normal,1),1) zeros(size(normal,1),1)];
   eta = capOut - bsxfun(@times, dotRows(capOut, normal), normal);
   eta = normalizeRows(eta);
-
-
-function theta = signedAngleAboutAxis(source, target, axis)
-
-  source = source - bsxfun(@times, dotRows(source, axis), axis);
-  target = target - bsxfun(@times, dotRows(target, axis), axis);
-  source = normalizeRows(source);
-  target = normalizeRows(target);
-  theta = atan2(dotRows(axis, cross(source, target, 2)), dotRows(source, target));
 
 
 function rotatedPoints = rotateAboutAxis(points, origin, axis, theta)
@@ -512,6 +529,34 @@ function printConvergenceTable(results)
               results.errorsL2(k), results.ratesL2(k-1));
     end
   end
+
+
+function plotConvergenceSummary(results)
+
+  [N, orderIdx] = sort(results.N);
+  linfErr = results.errorsLinf(orderIdx);
+  l2Err = results.errorsL2(orderIdx);
+
+  finiteRows = isfinite(N) & isfinite(linfErr) & isfinite(l2Err) & ...
+               (N > 0) & (linfErr > 0) & (l2Err > 0);
+  N = N(finiteRows);
+  linfErr = linfErr(finiteRows);
+  l2Err = l2Err(finiteRows);
+
+  if (isempty(N))
+    return;
+  end
+
+  ref = l2Err(1)*(N/N(1)).^(-2);
+
+  figure(2); clf;
+  loglog(N, linfErr, 'o-', N, l2Err, 's-', N, ref, 'k--', 'LineWidth', 1.5);
+  xlabel('N = 1/h');
+  ylabel('surface error');
+  title('two-sphere ICPM convergence');
+  legend('L_\infty error', 'L_2 error', 'O(h^2)', 'Location', 'southwest');
+  grid on;
+  drawnow(); pause(0);
 
 
 function plotLensSolution(x1d, y1d, z1d, ibandA, uA, ibandB, uB, ...
