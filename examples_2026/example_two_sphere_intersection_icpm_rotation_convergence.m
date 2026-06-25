@@ -21,11 +21,16 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
 
   R = getOption(opts, 'R', 1);
   a = getOption(opts, 'a', 0.5);
-  hvals = getOption(opts, 'hvals', 1./[20 40 80 160 320]);
+  hvals = getOption(opts, 'hvals', 1./[20 40]);
   p = getOption(opts, 'p', 3);
   order = getOption(opts, 'order', 2);
   makePlots = getOption(opts, 'makePlots', true);
   showDiagnostics = getOption(opts, 'showDiagnostics', true);
+  solver = getOption(opts, 'solver', 'auto');
+  directMaxUnknowns = getOption(opts, 'directMaxUnknowns', 2e5);
+  iterTol = getOption(opts, 'iterTol', 1e-8);
+  iterMaxit = getOption(opts, 'iterMaxit', 100);
+  gmresRestart = getOption(opts, 'gmresRestart', 50);
 
   if (a <= 0 || a >= R)
     error('Expected 0 < a < R.');
@@ -45,7 +50,9 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
 
   for k = 1:length(hvals)
     levelResults(k) = solveOneLevel(hvals(k), R, a, p, order, ...
-                                    makePlots, showDiagnostics);
+                                    makePlots, showDiagnostics, solver, ...
+                                    directMaxUnknowns, iterTol, iterMaxit, ...
+                                    gmresRestart);
   end
 
   results.h = hvals;
@@ -73,7 +80,9 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
   end
 
 
-function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics)
+function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics, ...
+                               solver, directMaxUnknowns, iterTol, iterMaxit, ...
+                               gmresRestart)
 
   dim = 3;
   fd_stenrad = order/2;
@@ -170,11 +179,6 @@ function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics)
     EBB(crossRowsB,:) = 0;
   end
 
-  Lblock = blkdiag(LA, LB);
-  Eblock = [EAA EAB; EBA EBB];
-  Rblock = blkdiag(RA, RB);
-  M = lapsharp_unordered(Lblock, Eblock, Rblock);
-
   rhsA = rhsMmsBranch(cpxInA, cpyInA, cpzInA, 'A', cenA, a, R);
   rhsB = rhsMmsBranch(cpxInB, cpyInB, cpzInB, 'B', cenB, a, R);
   rhs = [rhsA; rhsB];
@@ -182,7 +186,9 @@ function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics)
     error('Non-finite MMS right-hand side encountered at branch closest points.');
   end
 
-  u = (speye(size(M)) - M) \ rhs;
+  u = solveIcpLinearSystem(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
+                           solver, directMaxUnknowns, iterTol, iterMaxit, ...
+                           gmresRestart, showDiagnostics);
   if (any(~isfinite(u)))
     error('Non-finite ICPM solution encountered after solving the elliptic system.');
   end
@@ -216,7 +222,8 @@ function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics)
     error('Non-finite surface error diagnostic encountered.');
   end
 
-  rowSums = full(sum(Eblock, 2));
+  rowSums = full([sum(EAA, 2) + sum(EAB, 2); ...
+                  sum(EBA, 2) + sum(EBB, 2)]);
   maxRowSumError = max(abs(rowSums - 1));
 
   [maxSingularDiff, singularExactError] = singularCircleDiagnostic( ...
@@ -273,6 +280,131 @@ function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics)
   level.maxExtensionRowSumError = maxRowSumError;
   level.maxSingularBranchDifference = maxSingularDiff;
   level.maxSingularExactError = singularExactError;
+
+
+function u = solveIcpLinearSystem(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
+                                  solver, directMaxUnknowns, iterTol, iterMaxit, ...
+                                  gmresRestart, showDiagnostics)
+
+  solver = normalizeSolverName(solver);
+
+  nA = size(LA, 1);
+  nB = size(LB, 1);
+  n = nA + nB;
+
+  [LdiagA, LoffA] = splitLapsharpOperator(LA, RA);
+  [LdiagB, LoffB] = splitLapsharpOperator(LB, RB);
+
+  useDirect = strcmp(solver, 'direct') || ...
+              (strcmp(solver, 'auto') && n <= directMaxUnknowns);
+
+  if (showDiagnostics)
+    fprintf('Linear solve unknowns A/B/total: %d / %d / %d\n', nA, nB, n);
+    fprintf('Interpolation nnz EAA/EBB/EAB/EBA: %d / %d / %d / %d\n', ...
+            nnz(EAA), nnz(EBB), nnz(EAB), nnz(EBA));
+    fprintf('Estimated E sparse storage: %.1f MB\n', ...
+            sparseStorageMB(EAA, EBB, EAB, EBA));
+    fprintf('L off-diagonal nnz A/B: %d / %d\n', nnz(LoffA), nnz(LoffB));
+  end
+
+  if (useDirect)
+    if (showDiagnostics)
+      fprintf('Linear solver: direct sparse backslash\n');
+    end
+
+    MAA = spdiags(LdiagA, 0, nA, nA) + LoffA*EAA;
+    MAB = LoffA*EAB;
+    MBA = LoffB*EBA;
+    MBB = spdiags(LdiagB, 0, nB, nB) + LoffB*EBB;
+    M = [MAA MAB; MBA MBB];
+    A = speye(n) - M;
+
+    if (showDiagnostics)
+      fprintf('Explicit M nnz: %d, estimated sparse storage: %.1f MB\n', ...
+              nnz(M), sparseStorageMB(M));
+    end
+
+    u = A \ rhs;
+  else
+    if (showDiagnostics)
+      fprintf('Linear solver: matrix-free restarted GMRES');
+      if (strcmp(solver, 'auto'))
+        fprintf(' (auto: direct threshold %d unknowns)', directMaxUnknowns);
+      end
+      fprintf('\n');
+      fprintf('Explicit M is not assembled in this solve path.\n');
+    end
+
+    afun = @(v) applyIcpLinearSystem(v, LdiagA, LoffA, EAA, EAB, ...
+                                    LdiagB, LoffB, EBA, EBB);
+    precondDiag = 1 - [LdiagA; LdiagB];
+    precondDiag(abs(precondDiag) < eps) = 1;
+    mfun = @(v) v ./ precondDiag;
+
+    [u, flag, relres, iter] = gmres(afun, rhs, gmresRestart, iterTol, ...
+                                    iterMaxit, mfun);
+    if (showDiagnostics)
+      fprintf('GMRES flag: %d, relres: %g, iter: %s\n', ...
+              flag, relres, mat2str(iter));
+    end
+    if (flag ~= 0)
+      warning('example_two_sphere:gmresNoConvergence', ...
+              'GMRES did not meet the requested tolerance; flag=%d, relres=%g.', ...
+              flag, relres);
+    end
+  end
+
+
+function y = applyIcpLinearSystem(v, LdiagA, LoffA, EAA, EAB, ...
+                                  LdiagB, LoffB, EBA, EBB)
+
+  nA = length(LdiagA);
+  vA = v(1:nA);
+  vB = v(nA+1:end);
+
+  extA = EAA*vA + EAB*vB;
+  extB = EBA*vA + EBB*vB;
+
+  mvA = LdiagA.*vA + LoffA*extA;
+  mvB = LdiagB.*vB + LoffB*extB;
+
+  y = v - [mvA; mvB];
+
+
+function [Ldiag, Loff] = splitLapsharpOperator(L, R)
+
+  Ldiagpad = R .* L;
+  Ldiag = full(sum(Ldiagpad, 2));
+  Loff = L - Ldiagpad;
+
+
+function solver = normalizeSolverName(solver)
+
+  if (~ischar(solver))
+    error('opts.solver must be ''auto'', ''direct'', or ''gmres''.');
+  end
+
+  solver = lower(solver);
+  if (strcmp(solver, 'backslash'))
+    solver = 'direct';
+  elseif (strcmp(solver, 'iterative'))
+    solver = 'gmres';
+  end
+
+  if (~strcmp(solver, 'auto') && ~strcmp(solver, 'direct') && ...
+      ~strcmp(solver, 'gmres'))
+    error('opts.solver must be ''auto'', ''direct'', or ''gmres''.');
+  end
+
+
+function mb = sparseStorageMB(varargin)
+
+  bytes = 0;
+  for k = 1:nargin
+    A = varargin{k};
+    bytes = bytes + 16*nnz(A) + 8*(size(A, 2) + 1);
+  end
+  mb = bytes / 1024^2;
 
 
 function [cpx, cpy, cpz, dist, bdy] = cpSphereCap(x, y, z, R, cen, side)
