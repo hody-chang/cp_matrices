@@ -1,6 +1,6 @@
-function [theta, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
-%ANGLE2D  Estimate a 2D endpoint tangent angle from cp/cpbar averages.
-%   [theta, tangent, info] = angle2d(x, y, cpf, singularPoint, ...)
+function [R, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
+%ANGLE2D  Estimate a 2D endpoint rotation matrix from cp/cpbar averages.
+%   [R, tangent, info] = angle2d(x, y, cpf, singularPoint, ...)
 %      computes cp(x), then cpbar(x) = cp(2*cp(x)-x), using the closest
 %      point function handle cpf.  Points are selected either by closest
 %      point proximity to singularPoint = [sx sy], or, when singularPoint
@@ -8,13 +8,14 @@ function [theta, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
 %
 %      The vector cp - cpbar is formed at selected points.  Tiny vectors
 %      are discarded, the remaining vectors are normalized, and tangent is
-%      the normalized average direction.  theta = atan2(tangent(2),
-%      tangent(1)).  This direction estimates cp - cpbar, i.e. the
-%      outward endpoint direction or -incoming tangent.
+%      the normalized average direction.  R is the 2x2 rotation matrix
+%      that maps [1; 0] to tangent, built directly from the tangent
+%      components:  R = [t(1) -t(2); t(2) t(1)].  The angle
+%      theta = atan2(tangent(2), tangent(1)) is stored in info.theta.
 %
 %      Extra inputs are forwarded to cpf.
 %
-%   If there are no usable vectors, theta and tangent are NaN and
+%   If there are no usable vectors, R is NaN(2), tangent is NaN, and
 %   info.numValid is zero.
 
   if (nargin < 4)
@@ -58,6 +59,7 @@ function [theta, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
   numZero = sum(zeroMask(:));
 
   tangent = [NaN NaN];
+  R = NaN(2);
   theta = NaN;
   average = [NaN NaN];
   averageNorm = NaN;
@@ -71,9 +73,11 @@ function [theta, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
     if (averageNorm > vectorTol)
       tangent = average ./ averageNorm;
       theta = atan2(tangent(2), tangent(1));
+      R = [tangent(1) -tangent(2); tangent(2) tangent(1)];
     end
   end
 
+  info.theta = theta;
   info.numCandidates = numCandidates;
   info.numValid = numValid;
   info.numZero = numZero;

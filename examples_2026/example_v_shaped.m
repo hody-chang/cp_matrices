@@ -288,10 +288,11 @@ function [EAA, EAB, EBA, EBB, crossRowsA, crossRowsB] = ...
 
   cpfA = @(x, y) cpLineSegment2d(x, y, pA, qA);
   cpfB = @(x, y) cpLineSegment2d(x, y, pB, qB);
-  thetaAOut = angle2d(branchA.xOut, branchA.yOut, cpfA, qA);
-  thetaBOut = angle2d(branchB.xOut, branchB.yOut, cpfB, pB);
-  thetaAtoB = angle(exp(1i*((thetaBOut + pi) - thetaAOut)));
-  thetaBtoA = angle(exp(1i*((thetaAOut + pi) - thetaBOut)));
+  RA_out = angle2d(branchA.xOut, branchA.yOut, cpfA, qA);
+  RB_out = angle2d(branchB.xOut, branchB.yOut, cpfB, pB);
+  Rpi = [-1 0; 0 -1];
+  RAtoB = RB_out * Rpi * RA_out.';
+  RBtoA = RA_out * Rpi * RB_out.';
 
   if (~isempty(crossRowsA))
     x0 = branchA.cpxOut(crossRowsA);
@@ -299,8 +300,8 @@ function [EAA, EAB, EBA, EBB, crossRowsA, crossRowsB] = ...
     dx0 = branchA.xOut(crossRowsA) - x0;
     dy0 = branchA.yOut(crossRowsA) - y0;
 
-    xr = x0 + cos(thetaAtoB)*dx0 - sin(thetaAtoB)*dy0;
-    yr = y0 + sin(thetaAtoB)*dx0 + cos(thetaAtoB)*dy0;
+    xr = x0 + RAtoB(1,1)*dx0 + RAtoB(1,2)*dy0;
+    yr = y0 + RAtoB(2,1)*dx0 + RAtoB(2,2)*dy0;
 
     [cpxAtoB, cpyAtoB] = cpLineSegment2d(xr, yr, pB, qB);
     EAB(crossRowsA, :) = interp2_matrix(x1d, y1d, cpxAtoB, cpyAtoB, ...
@@ -314,8 +315,8 @@ function [EAA, EAB, EBA, EBB, crossRowsA, crossRowsB] = ...
     dx0 = branchB.xOut(crossRowsB) - x0;
     dy0 = branchB.yOut(crossRowsB) - y0;
 
-    xr = x0 + cos(thetaBtoA)*dx0 - sin(thetaBtoA)*dy0;
-    yr = y0 + sin(thetaBtoA)*dx0 + cos(thetaBtoA)*dy0;
+    xr = x0 + RBtoA(1,1)*dx0 + RBtoA(1,2)*dy0;
+    yr = y0 + RBtoA(2,1)*dx0 + RBtoA(2,2)*dy0;
 
     [cpxBtoA, cpyBtoA] = cpLineSegment2d(xr, yr, pA, qA);
     EBA(crossRowsB, :) = interp2_matrix(x1d, y1d, cpxBtoA, cpyBtoA, ...

@@ -21,7 +21,7 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
 
   R = getOption(opts, 'R', 1);
   a = getOption(opts, 'a', 0.5);
-  hvals = getOption(opts, 'hvals', 1./[20 40]);
+  hvals = getOption(opts, 'hvals', 1./[20 40 100]);
   p = getOption(opts, 'p', 3);
   order = getOption(opts, 'order', 2);
   makePlots = getOption(opts, 'makePlots', true);
@@ -474,27 +474,41 @@ function [rotatedPoints, theta] = rotateBranchPoints(points, singularPoints, R, 
   etaFromProbe = capConormal(nFrom, fromSide);
   etaTo = capConormal(nTo, toSide);
   targetDirection = -etaTo;
+  Rk = cell(size(points, 1), 1);
   theta = NaN(size(points, 1), 1);
   cpfFrom = @(x, y, z) cpSphereCap(x, y, z, R, fromCenter, fromSide);
 
   minProbeDistance = sqrt(eps)*max(1, R);
   for k = 1:size(points, 1)
-    theta(k) = angle3D(points(k,1), points(k,2), points(k,3), cpfFrom, ...
-                       singularPoints(k,:), tau(k,:), targetDirection(k,:));
+    [Rk{k}, ~, angleInfo] = angle3D(points(k,1), points(k,2), points(k,3), cpfFrom, ...
+                                    singularPoints(k,:), tau(k,:), targetDirection(k,:));
+    theta(k) = angleInfo.theta;
 
-    if (~isfinite(theta(k)))
+    if (any(~isfinite(Rk{k}(:))))
       probeDistance = max(norm(points(k,:) - singularPoints(k,:)), minProbeDistance);
       probePoint = singularPoints(k,:) + probeDistance*etaFromProbe(k,:);
-      theta(k) = angle3D(probePoint(1), probePoint(2), probePoint(3), cpfFrom, ...
-                         singularPoints(k,:), tau(k,:), targetDirection(k,:));
+      [Rk{k}, ~, angleInfo] = angle3D(probePoint(1), probePoint(2), probePoint(3), cpfFrom, ...
+                                      singularPoints(k,:), tau(k,:), targetDirection(k,:));
+      theta(k) = angleInfo.theta;
     end
   end
 
-  if (any(~isfinite(theta)))
-    error('angle3D did not return finite branch rotation angles.');
+  allFinite = true;
+  for k = 1:size(points, 1)
+    if (any(~isfinite(Rk{k}(:))))
+      allFinite = false;
+      break;
+    end
+  end
+  if (~allFinite)
+    error('angle3D did not return finite branch rotation matrices.');
   end
 
-  rotatedPoints = rotateAboutAxis(points, singularPoints, tau, theta);
+  rotatedPoints = zeros(size(points));
+  for k = 1:size(points, 1)
+    v = (points(k,:) - singularPoints(k,:)).';
+    rotatedPoints(k,:) = singularPoints(k,:) + (Rk{k} * v).';
+  end
 
 
 function eta = capConormal(normal, side)
@@ -502,19 +516,6 @@ function eta = capConormal(normal, side)
   capOut = [-side*ones(size(normal,1),1) zeros(size(normal,1),1) zeros(size(normal,1),1)];
   eta = capOut - bsxfun(@times, dotRows(capOut, normal), normal);
   eta = normalizeRows(eta);
-
-
-function rotatedPoints = rotateAboutAxis(points, origin, axis, theta)
-
-  axis = normalizeRows(axis);
-  v = points - origin;
-  c = cos(theta);
-  s = sin(theta);
-  axisDotV = dotRows(axis, v);
-  rotatedV = bsxfun(@times, v, c) + ...
-             bsxfun(@times, cross(axis, v, 2), s) + ...
-             bsxfun(@times, axis, axisDotV.*(1 - c));
-  rotatedPoints = origin + rotatedV;
 
 
 function u = exactMmsBranch(x, y, z, branch, cen, a, R)
