@@ -1,6 +1,6 @@
-function [theta, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis, targetDirection, varargin)
-%ANGLE3D  Estimate a 3D branch conormal from cp/cpbar averages.
-%   [theta, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis,
+function [R, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis, targetDirection, varargin)
+%ANGLE3D  Estimate a 3D branch rotation matrix from cp/cpbar averages.
+%   [R, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis,
 %      targetDirection, ...) computes cp(x), then
 %      cpbar(x) = cp(2*cp(x)-x), using the closest point function handle
 %      cpf.  Points are selected either by closest point proximity to
@@ -13,16 +13,15 @@ function [theta, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis, ta
 %      the normalized average direction.  This direction estimates the
 %      branch outward co-normal or -incoming tangent analogue.
 %
-%      When axis and targetDirection are both supplied and non-empty, theta
-%      is the signed angle about axis from conormal to targetDirection.
-%      conormal and targetDirection are projected perpendicular to axis
-%      before applying atan2(dot(axis,cross(source,target)),
-%      dot(source,target)).  When axis or targetDirection is omitted, theta
-%      is NaN.
+%      When axis and targetDirection are both supplied and non-empty, R is
+%      the 3x3 rotation matrix (Rodrigues' formula) about axis that maps
+%      conormal to targetDirection (both projected perpendicular to axis).
+%      The angle theta = atan2(sin,cos) is stored in info.theta.  When
+%      axis or targetDirection is omitted, R is NaN(3).
 %
 %      Extra inputs are forwarded to cpf.
 %
-%   If there are no usable vectors, theta and conormal are NaN and
+%   If there are no usable vectors, R is NaN(3), conormal is NaN, and
 %   info.numValid is zero.
 
   if (nargin < 5)
@@ -84,6 +83,7 @@ function [theta, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis, ta
   numZero = sum(zeroMask(:));
 
   conormal = [NaN NaN NaN];
+  R = NaN(3);
   theta = NaN;
   average = [NaN NaN NaN];
   averageNorm = NaN;
@@ -121,12 +121,18 @@ function [theta, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis, ta
       if (sourceNorm > vectorTol && targetProjectedNorm > vectorTol)
         angleSource = angleSource ./ sourceNorm;
         angleTarget = angleTarget ./ targetProjectedNorm;
-        theta = atan2(dot(axisUnit, cross(angleSource, angleTarget)), ...
-                      dot(angleSource, angleTarget));
+        cosTheta = dot(angleSource, angleTarget);
+        sinTheta = dot(axisUnit, cross(angleSource, angleTarget));
+        K = [0 -axisUnit(3) axisUnit(2); ...
+             axisUnit(3) 0 -axisUnit(1); ...
+             -axisUnit(2) axisUnit(1) 0];
+        R = eye(3) + sinTheta*K + (1 - cosTheta)*(K*K);
+        theta = atan2(sinTheta, cosTheta);
       end
     end
   end
 
+  info.theta = theta;
   info.numCandidates = numCandidates;
   info.numValid = numValid;
   info.numZero = numZero;

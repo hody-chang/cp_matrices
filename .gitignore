@@ -22,3 +22,9 @@ python/build
 *.tar
 *.tar.gz
 *.zip
+
+# Agnet
+CLAUDE.md
+
+#Mac
+.DS_Store
