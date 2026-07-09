@@ -25,6 +25,8 @@ python/build
 
 # Agnet
 CLAUDE.md
+.agnets
+.codex
 
 #Mac
 .DS_Store

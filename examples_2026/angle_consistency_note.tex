@@ -1,0 +1,295 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+\newtheorem{remark}{Remark}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\cp}{\mathrm{cp}}
+\newcommand{\cpbar}{\overline{\mathrm{cp}}}
+\newcommand{\dist}{\operatorname{dist}}
+\newcommand{\intr}{\operatorname{int}}
+\newcommand{\norm}[1]{\lVert #1 \rVert}
+\newcommand{\ip}[2]{\langle #1, #2 \rangle}
+
+\title{Consistency and stability of the $\cp-\cpbar$ conormal estimator\\
+  \large (\texttt{angle2d.m} / \texttt{angle3D.m})}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We prove that the rotation-estimation method implemented in
+\texttt{angle2d.m} and \texttt{angle3D.m} --- which averages normalized
+vectors $\cp(x)-\cpbar(x)$ over grid points whose closest point lies on
+the boundary of a surface (or at a branch/singular point), and builds a
+rotation matrix from the averaged direction --- is first-order consistent
+with the true outward conormal and the exact continuous rotation, and is
+stable: the constructed matrix lies exactly in $SO(n)$, the
+direction-to-rotation map is $1$-Lipschitz, and all normalizations are
+$O(1)$-conditioned with degenerate inputs rejected. For straight
+segments and planar patches the direction estimate is exact.
+\end{abstract}
+
+\section{Setup}
+
+Let $S\subset\R^n$ ($n=2,3$) be a $C^2$ embedded manifold-with-boundary
+of positive reach $r_0>0$ in the region of interest, with boundary
+$\Gamma=\partial S$ (also of reach $\ge r_0$). For $q\in\Gamma$ write
+$T_qS$ for the tangent space of $S$, $N_qS$ for its orthogonal
+complement in $\R^n$, and $T_q\Gamma\subset T_qS$ for the tangent of the
+boundary (in 2D, $\Gamma$ is a set of endpoints and $T_q\Gamma=\{0\}$).
+Let $\nu(q)\in T_qS$ denote the \emph{unit outward conormal}: the vector
+in $T_qS$ orthogonal to $T_q\Gamma$ pointing out of $S$ through
+$\Gamma$; in 2D this is the outgoing unit tangent of the curve at the
+endpoint. Let $\kappa$ bound the relevant curvatures (second fundamental
+form of $S$, geodesic curvature of $\Gamma$).
+
+Let $\cp=P_S$ be the closest-point projection, well defined and $C^1$ on
+the tube $\{\dist(\cdot,S)<r_0\}$. Following Macdonald, Brandman and
+Ruuth (2011), define the double projection
+\[
+  \cpbar(x) \;=\; \cp\bigl(2\,\cp(x)-x\bigr).
+\]
+At each grid point $x$ the code computes
+\[
+  v(x) \;=\; \cp(x) - \cpbar(x),
+\]
+keeps the points whose closest point lies on $\Gamma$ (the
+\texttt{bdy} mask, or proximity of $\cp(x)$ to a specified singular
+point within \texttt{singularTol}), discards vectors with
+$\norm{v}\le\texttt{vectorTol}$, normalizes each survivor, averages the
+unit vectors, renormalizes the average to obtain the direction estimate
+(\texttt{tangent} in 2D, \texttt{conormal} in 3D), and constructs a
+rotation matrix $R$ from it (directly in 2D; via Rodrigues' formula
+about a prescribed axis in 3D).
+
+Two standard facts about $P_S$ inside the tube are used throughout:
+\begin{itemize}
+\item[(P1)] If $\cp(x)=p\in\intr S$, then $x-p\in N_pS$: the residual is
+  purely $S$-normal.
+\item[(P2)] The set of points projecting to $q\in\Gamma$ is the normal
+  cone
+  \[
+    \mathcal N_q=\bigl\{\,q+b\,\nu(q)+\eta \;:\; b\ge 0,\ \eta\in
+    N_qS\,\bigr\}\cap\{\text{tube}\},
+  \]
+  where $b=\ip{x-q}{\nu(q)}\ge 0$ is the \emph{outward overhang} of $x$
+  past the boundary.
+\end{itemize}
+
+\section{The geometric core}
+
+\begin{lemma}[Interior annihilation]\label{lem:interior}
+If $\cp(x)=p\in\intr S$, then $v(x)=0$ exactly.
+\end{lemma}
+
+\begin{proof}
+By (P1), $x-p\in N_pS$. The reflected point is
+$\bar x = 2p-x = p-(x-p)$, so $\bar x - p = -(x-p)\in N_pS$: $\bar x$
+lies on the same normal line through $p$, within the reach. Every point
+of that segment has closest point $p$ by definition of the projection,
+so $\cpbar(x)=\cp(\bar x)=p$ and $v(x)=p-p=0$.
+\end{proof}
+
+Lemma~\ref{lem:interior} justifies the \texttt{vectorTol} filter:
+interior and degenerate samples contribute a provably zero vector and
+are removed; only genuine boundary points inform the estimate.
+
+\begin{lemma}[Boundary expansion]\label{lem:boundary}
+Let $\cp(x)=q\in\Gamma$, so by \textup{(P2)} $x-q = b\,\nu(q)+\eta$ with
+$b\ge 0$ and $\eta\in N_qS$. Then
+\[
+  v(x) \;=\; b\,\nu(q) \;+\; O\!\bigl(\kappa\,(b^2+b\norm{\eta})\bigr).
+\]
+In particular, if $S$ is flat near $q$ (a straight segment or planar
+patch, $\kappa=0$), then $v(x)=b\,\nu(q)$ exactly.
+\end{lemma}
+
+\begin{proof}
+We have $\bar x = 2q-x = q - b\,\nu - \eta$. Split $\bar x - q$ into its
+$S$-tangential part $-b\,\nu$ (pointing \emph{into} $S$, since
+$b\ge 0$) and $S$-normal part $-\eta$. Let $\sigma$ be the unit-speed
+geodesic in $S$ with $\sigma(0)=q$, $\sigma'(0)=-\nu$; then
+$\sigma(b) = q - b\,\nu + O(\kappa b^2)$, and
+\[
+  \bar x - \sigma(b) = -\eta + O(\kappa b^2),
+\]
+which is $S$-normal up to $O(\kappa b\norm{\eta})$ (the normal spaces
+along $\sigma$ tilt at rate $O(\kappa)$). For a competing foot point
+$\sigma(b)+\tau$ with $\tau$ tangential,
+\[
+  \norm{\bar x-\sigma(b)-\tau}^2
+  = \norm{\bar x-\sigma(b)}^2 + \norm{\tau}^2
+    - 2\ip{\bar x-\sigma(b)}{\tau},
+\]
+and the cross term is
+$O\bigl(\kappa(b^2+b\norm{\eta})\,\norm{\tau}\bigr)$ because
+$\bar x-\sigma(b)$ is nearly normal. Minimizing over $\tau$ forces
+$\norm{\tau}=O(\kappa(b^2+b\norm{\eta}))$, hence
+\[
+  \cpbar(x) = \cp(\bar x)
+  = q - b\,\nu + O\bigl(\kappa(b^2+b\norm{\eta})\bigr),
+\]
+and $v(x)=q-\cpbar(x)=b\,\nu+O(\kappa(b^2+b\norm{\eta}))$. When
+$\kappa=0$ the geodesic is a straight line in $S$, all error terms
+vanish, and $v(x)=b\,\nu$ exactly for every $b\ge0$.
+\end{proof}
+
+\begin{remark}
+The exact case is the situation of the V-shaped example
+(\texttt{example\_v\_shaped.m}): each branch is a straight segment, so
+\texttt{angle2d} recovers the outgoing branch tangent with zero
+discretization error, up to floating point.
+\end{remark}
+
+\section{Consistency}
+
+\begin{theorem}[Consistency]\label{thm:consistency}
+Let $x_1,\dots,x_m$ be the retained candidate points, with
+$\cp(x_i)=q_i\in\Gamma$, $\norm{x_i-q_i}\le Ch$ (a band of width
+$O(h)$), and overhang bounded below, $b_i\ge c\,h$ for some $c>0$
+(automatic for a standard band; vacuous when $\kappa=0$). Let
+$\delta=\max_i\norm{q_i-q_0}$ measure the clustering of the footpoints
+around the target boundary point $q_0$ (enforced by
+\texttt{singularTol}, or $\delta\to0$ as $h\to0$ under the \texttt{bdy}
+mask). Then the returned direction satisfies
+\[
+  \mathrm{conormal}
+  \;=\; \nu(q_0) + O(\kappa h + \kappa\delta)
+  \;\xrightarrow[h,\delta\to0]{}\; \nu(q_0),
+\]
+and the constructed rotation satisfies
+$\norm{R-R_{\mathrm{exact}}} = O(\kappa h + \kappa\delta)$. When
+$\kappa=0$ the estimates are exact.
+\end{theorem}
+
+\begin{proof}
+By Lemma~\ref{lem:boundary}, since normalization removes the magnitude
+$b_i$,
+\[
+  u_i \coloneqq \frac{v(x_i)}{\norm{v(x_i)}}
+  = \nu(q_i) + O\!\Bigl(\frac{\kappa(b_i^2+b_i h)}{b_i}\Bigr)
+  = \nu(q_i) + O(\kappa h),
+\]
+using $b_i\ge ch$ and $\norm{\eta_i}\le Ch$. Smoothness of $\Gamma$
+gives $\nu(q_i)=\nu(q_0)+O(\kappa\delta)$. Averaging the clustered unit
+vectors,
+\[
+  \bar a = \frac1m\sum_{i=1}^m u_i
+  = \nu(q_0) + O(\kappa h + \kappa\delta),
+  \qquad
+  \norm{\bar a} = 1 - O\bigl((\kappa h+\kappa\delta)^2\bigr),
+\]
+so $\norm{\bar a}$ is bounded away from zero and the renormalized
+average satisfies the stated bound.
+
+For the rotation: in 2D,
+$R=\begin{psmallmatrix} t_1 & -t_2\\ t_2 & t_1\end{psmallmatrix}$ is a
+smooth ($1$-Lipschitz, Theorem~\ref{thm:stability}(b)) function of the
+unit direction $t$. In 3D, with unit axis $u$ and $s,t$ the normalized
+projections of the estimated conormal and the target direction onto
+$u^\perp$, the code sets $\cos\theta=\ip{s}{t}$,
+$\sin\theta=\ip{u}{s\times t}$ and applies Rodrigues' formula; $R$ is a
+smooth function of $(\theta,u)$ wherever the projections exceed the
+tolerance. In both cases $\norm{R-R_{\mathrm{exact}}}$ is bounded by the
+direction error. Finally, composed branch rotations of the form
+$R_{A\to B}=R_B\,R_\pi R_A^{\top}$ inherit the same bound, since for
+orthogonal factors $\norm{AB-A'B'}\le\norm{A-A'}+\norm{B-B'}$ in
+operator norm.
+\end{proof}
+
+\section{Stability}
+
+\begin{theorem}[Stability]\label{thm:stability}
+The method has the following stability properties.
+\begin{itemize}
+\item[(a)] \textbf{Exact rotations.} For any input direction the
+  constructed matrix lies exactly in $SO(n)$. In 2D,
+  $R^{\top}R=(t_1^2+t_2^2)I=I$ and $\det R=t_1^2+t_2^2=1$ because $t$ is
+  normalized. In 3D, with $s,t$ unit and orthogonal to $u$, one has
+  $s\times t=(\sin\varphi)\,u$, hence
+  $\cos^2\theta+\sin^2\theta=\cos^2\varphi+\sin^2\varphi=1$ exactly, and
+  with $K$ the skew matrix of the \emph{unit} axis ($K^{\top}=-K$,
+  $K^3=-K$), Rodrigues'
+  $R=I+\sin\theta\,K+(1-\cos\theta)K^2$ satisfies $R^{\top}R=I$ and
+  $\det R=1$ algebraically. The method never emits a non-rotation.
+\item[(b)] \textbf{$1$-Lipschitz direction-to-rotation map.} In 2D,
+  $t\mapsto R(t)$ is the standard isometry $S^1\cong SO(2)$: a direction
+  error of angle $\delta$ gives
+  $\norm{R(t')-R(t)}=2\lvert\sin(\delta/2)\rvert\le\delta$. In 3D,
+  $\partial R/\partial\theta$ is a rotation generator of unit operator
+  norm on $u^\perp$, so an angle error $\delta$ yields
+  $\norm{\Delta R}\le\delta$; the projections onto $u^\perp$ are
+  bounded linear maps. Direction error is not amplified.
+\item[(c)] \textbf{$O(1)$-conditioned normalizations.} Each per-point
+  normalization $u_i=v_i/\norm{v_i}$ is performed only when
+  $\norm{v_i}>\texttt{vectorTol}$, so the relative amplification of
+  floating-point error in $v_i$ is $O(1)$. Averaging \emph{unit}
+  vectors reduces independent per-point noise like $1/\sqrt m$, and the
+  final division uses $\norm{\bar a}\ge\tfrac12$ (clustering,
+  Theorem~\ref{thm:consistency}).
+\item[(d)] \textbf{Rejection of ill-posed inputs.} If no valid vectors
+  remain, if the unit vectors cancel
+  ($\norm{\bar a}\le\texttt{vectorTol}$: a symmetric configuration with
+  no defined direction), or if the conormal or target is parallel to
+  the axis (projected norms below tolerance: the in-plane angle is
+  undefined), the code returns \texttt{NaN} rather than an arbitrary
+  bounded rotation.
+\item[(e)] \textbf{Scale invariance.} The tolerance
+  $\texttt{tol}=100\,\varepsilon\cdot\max(1,\max\lvert\text{data}\rvert)$
+  is homogeneous of degree one in the coordinates, so the retained set
+  and all threshold tests are invariant under a change of units.
+\end{itemize}
+\end{theorem}
+
+\begin{proof}
+Each item is proved in its statement; (a) and (b) are algebraic
+identities, (c) follows from the tolerance guards and
+Theorem~\ref{thm:consistency}, and (d), (e) are read off the
+implementation.
+\end{proof}
+
+\section{Conclusion and hypotheses}
+
+By Lemmas~\ref{lem:interior}--\ref{lem:boundary}, $\cp-\cpbar$ vanishes
+identically over the interior and equals $b\,\nu+O(\kappa h^2)$ over the
+boundary band; normalization removes the magnitude, so the averaged,
+renormalized direction converges to the true outward conormal at rate
+$O(\kappa h)$ (exactly for straight or planar branches,
+Theorem~\ref{thm:consistency}). The rotation constructors map this
+direction into $SO(n)$ exactly and $1$-Lipschitzly
+(Theorem~\ref{thm:stability}), so the estimated rotation converges at
+$O(h)$ with unit sensitivity, and degenerate inputs return
+\texttt{NaN}. The method is therefore consistent and stable. Two
+hypotheses deserve emphasis:
+
+\begin{enumerate}
+\item \emph{Positive reach / resolved geometry.} All arguments require
+  $h\ll r_0$ so that $\cp$ is single-valued on the band. Near a genuine
+  cusp, or where two sheets approach within $O(h)$ (e.g.\ the
+  piriform-cusp and two-sphere-intersection examples), the local reach
+  shrinks and the constant in $O(\kappa h)$ degrades; the mechanism is
+  unchanged, but the rate is meaningful only once $h$ resolves the
+  local reach.
+\item \emph{Overhang lower bound $b_i\ge ch$.} Needed only for curved
+  boundaries, to control the per-point direction error
+  $O(\kappa h^2/b_i)$; it holds for a standard computational band and
+  is irrelevant when $\kappa=0$.
+\end{enumerate}
+
+\begin{thebibliography}{9}
+\bibitem{MBR2011}
+C.~B. Macdonald, J.~Brandman, S.~J. Ruuth,
+\emph{Solving eigenvalue problems on curved surfaces using the closest
+point method},
+J. Comput. Phys. 230 (2011), 7944--7956.
+\end{thebibliography}
+
+\end{document}
