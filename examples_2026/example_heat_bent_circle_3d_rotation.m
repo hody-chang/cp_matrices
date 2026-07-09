@@ -37,7 +37,7 @@ cleanupICPM2009BANDINGCHECKS = onCleanup(@() reset_icpm2009bandingchecks());
 
 doPlots = true;   % evolution plots on the finest level + convergence plot
 
-hvals = 1./[20 40 80];   % grid sizes for the convergence study
+hvals = 1./[20 40 80 100];   % grid sizes for the convergence study
 
 RADIUS = 1;
 cen = [0 0];
@@ -410,7 +410,7 @@ for level = 1:length(hvals)
     if (plotLevel && ((mod(kt,plotgap) == 0) || (kt == numtimesteps)))
 
       % plot the computational bands in 3D, colored by u
-      set(0, 'CurrentFigure', 1);
+      activateFigure(1);
       clf;
       scatter3([xginA; xginB], [yginA; yginB], [zginA; zginB], 12, ...
                [uA; uB], 'filled');
@@ -425,7 +425,7 @@ for level = 1:length(hvals)
               ', timestep #' num2str(kt)] );
 
       % plot value on the curve against arclength
-      set(0, 'CurrentFigure', 2);
+      activateFigure(2);
       clf;
       curveplotA = EplotA*uA;
       curveplotB = EplotB*uB;
@@ -443,7 +443,7 @@ for level = 1:length(hvals)
              'exact answer', 'initial condition', 'Location', 'SouthEast');
 
       % plot error on the curve
-      set(0, 'CurrentFigure', 3);
+      activateFigure(3);
       clf;
       plot(splotA, curveplotA - uexactfn(t,splotA), 'b-');
       hold on;
@@ -513,6 +513,18 @@ end
 function reset_icpm2009bandingchecks()
   global ICPM2009BANDINGCHECKS
   ICPM2009BANDINGCHECKS = 0;
+end
+
+
+function activateFigure(n)
+%ACTIVATEFIGURE  Make figure n current without stealing focus.
+%   Like set(0,'CurrentFigure',n), but recreates the figure if it was
+%   closed during the run (set(0,...) errors on a missing figure).
+  if (ishghandle(n, 'figure'))
+    set(0, 'CurrentFigure', n);
+  else
+    figure(n);
+  end
 end
 
 
