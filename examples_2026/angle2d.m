@@ -1,10 +1,10 @@
-function [R, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
+function [R, tangent, info] = angle2d(x, y, cpf, singpt, varargin)
 %ANGLE2D  Estimate a 2D endpoint rotation matrix from cp/cpbar averages.
-%   [R, tangent, info] = angle2d(x, y, cpf, singularPoint, ...)
+%   [R, tangent, info] = angle2d(x, y, cpf, singpt, ...)
 %      computes cp(x), then cpbar(x) = cp(2*cp(x)-x), using the closest
 %      point function handle cpf.  Points are selected either by closest
-%      point proximity to singularPoint = [sx sy], or, when singularPoint
-%      is omitted or empty, by bdy ~= 0 from cpf.
+%      point proximity to singpt = [sx sy], or, when singpt is omitted
+%      or empty, by bdy ~= 0 from cpf.
 %
 %      The vector cp - cpbar is formed at selected points.  Tiny vectors
 %      are discarded, the remaining vectors are normalized, and tangent is
@@ -17,17 +17,21 @@ function [R, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
 %
 %   If there are no usable vectors, R is NaN(2), tangent is NaN, and
 %   info.numValid is zero.
+%
+%   Code is vectorized: any size/shape for x should work, provided the
+%   function handle cpf is vectorized as well.
 
   if (nargin < 4)
-    singularPoint = [];
+    singpt = [];
   end
 
   [cpx, cpy, dist, bdy] = cpf(x, y, varargin{:});
   [cpbarx, cpbary] = cpf(2*cpx - x, 2*cpy - y, varargin{:});
 
+  % the tolerances scale with the coordinates the cp function works in
   vals = [x(:); y(:); cpx(:); cpy(:); cpbarx(:); cpbary(:)];
-  if (~isempty(singularPoint))
-    vals = [vals; singularPoint(:)];
+  if (~isempty(singpt))
+    vals = [vals; singpt(:)];
   end
   vals = vals(isfinite(vals));
   if isempty(vals)
@@ -37,50 +41,52 @@ function [R, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
   end
 
   tol = 100*eps*scale;
-  singularTol = tol;
-  vectorTol = tol;
+  singtol = tol;
+  vectol = tol;
 
-  if isempty(singularPoint)
+  if isempty(singpt)
     mask = (bdy ~= 0);
   else
-    sx = singularPoint(1);
-    sy = singularPoint(2);
-    mask = sqrt((cpx - sx).^2 + (cpy - sy).^2) <= singularTol;
+    sx = singpt(1);
+    sy = singpt(2);
+    mask = sqrt((cpx - sx).^2 + (cpy - sy).^2) <= singtol;
   end
 
   vx = cpx - cpbarx;
   vy = cpy - cpbary;
-  vectorNorms = sqrt(vx.^2 + vy.^2);
-  validMask = mask & isfinite(vectorNorms) & (vectorNorms > vectorTol);
-  zeroMask = mask & isfinite(vectorNorms) & (vectorNorms <= vectorTol);
+  vnorm = sqrt(vx.^2 + vy.^2);
+  validmask = mask & isfinite(vnorm) & (vnorm > vectol);
+  zeromask = mask & isfinite(vnorm) & (vnorm <= vectol);
 
-  numCandidates = sum(mask(:));
-  numValid = sum(validMask(:));
-  numZero = sum(zeroMask(:));
+  ncand = sum(mask(:));
+  nvalid = sum(validmask(:));
+  nzero = sum(zeromask(:));
 
   tangent = [NaN NaN];
   R = NaN(2);
   theta = NaN;
-  average = [NaN NaN];
-  averageNorm = NaN;
+  avg = [NaN NaN];
+  avgnorm = NaN;
 
-  if (numValid > 0)
-    ux = vx(validMask) ./ vectorNorms(validMask);
-    uy = vy(validMask) ./ vectorNorms(validMask);
-    average = [mean(ux(:)) mean(uy(:))];
-    averageNorm = norm(average);
+  if (nvalid > 0)
+    ux = vx(validmask) ./ vnorm(validmask);
+    uy = vy(validmask) ./ vnorm(validmask);
+    avg = [mean(ux(:)) mean(uy(:))];
+    avgnorm = norm(avg);
 
-    if (averageNorm > vectorTol)
-      tangent = average ./ averageNorm;
+    if (avgnorm > vectol)
+      tangent = avg ./ avgnorm;
       theta = atan2(tangent(2), tangent(1));
       R = [tangent(1) -tangent(2); tangent(2) tangent(1)];
     end
   end
 
+  % NB: the info field names below are the output interface of this
+  % function; the tests in surfaces/tests depend on them.
   info.theta = theta;
-  info.numCandidates = numCandidates;
-  info.numValid = numValid;
-  info.numZero = numZero;
+  info.numCandidates = ncand;
+  info.numValid = nvalid;
+  info.numZero = nzero;
   info.cpx = cpx;
   info.cpy = cpy;
   info.dist = dist;
@@ -88,12 +94,13 @@ function [R, tangent, info] = angle2d(x, y, cpf, singularPoint, varargin)
   info.cpbarx = cpbarx;
   info.cpbary = cpbary;
   info.mask = mask;
-  info.validMask = validMask;
-  info.zeroMask = zeroMask;
+  info.validMask = validmask;
+  info.zeroMask = zeromask;
   info.vectors = [vx(:) vy(:)];
-  info.vectorNorms = vectorNorms;
-  info.average = average;
-  info.averageNorm = averageNorm;
+  info.vectorNorms = vnorm;
+  info.average = avg;
+  info.averageNorm = avgnorm;
   info.tol = tol;
-  info.singularTol = singularTol;
-  info.vectorTol = vectorTol;
+  info.singularTol = singtol;
+  info.vectorTol = vectol;
+end

@@ -1,6 +1,6 @@
-function results = example_two_sphere_intersection_icpm_rotation_convergence(opts)
-%EXAMPLE_TWO_SPHERE_INTERSECTION_ICPM_ROTATION_CONVERGENCE
-% Manufactured-solution convergence for two sphere caps glued along a circle.
+%% Two sphere caps glued along a circle, with branch rotation
+% Manufactured-solution convergence for two sphere caps glued along a
+% circle.
 %
 % The surface is the boundary of the intersection of two unit spheres with
 % centers [-a 0 0] and [a 0 0].  Branch A is the cap x >= 0 on the left
@@ -8,105 +8,142 @@ function results = example_two_sphere_intersection_icpm_rotation_convergence(opt
 % extension rows whose closest points are on the shared singular circle are
 % rotated into the opposite branch and placed in the off-diagonal block of
 % the closest point extension matrix.
-
-  if (nargin < 1)
-    opts = struct();
-  end
-
-  thisdir = fileparts(mfilename('fullpath'));
-  repodir = fileparts(thisdir);
-  addpath(thisdir);
-  addpath(fullfile(repodir, 'cp_matrices'));
-  addpath(fullfile(repodir, 'surfaces'));
-
-  R = getOption(opts, 'R', 1);
-  a = getOption(opts, 'a', 0.5);
-  hvals = getOption(opts, 'hvals', 1./[20 40 80]);
-  p = getOption(opts, 'p', 3);
-  order = getOption(opts, 'order', 2);
-  beta = getOption(opts, 'beta', 1.0);
-  makePlots = getOption(opts, 'makePlots', true);
-  showDiagnostics = getOption(opts, 'showDiagnostics', true);
-  solver = getOption(opts, 'solver', 'auto');
-  directMaxUnknowns = getOption(opts, 'directMaxUnknowns', 2e5);
-  iterTol = getOption(opts, 'iterTol', 1e-8);
-  iterMaxit = getOption(opts, 'iterMaxit', 100);
-  gmresRestart = getOption(opts, 'gmresRestart', 50);
-
-  if (a <= 0 || a >= R)
-    error('Expected 0 < a < R.');
-  end
-
-  hvals = hvals(:).';
-  if (any(hvals <= 0))
-    error('All h values must be positive.');
-  end
-
-  global ICPM2009BANDINGCHECKS
-  oldBandingChecks = ICPM2009BANDINGCHECKS;
-  ICPM2009BANDINGCHECKS = 1;
-  cleanupICPM2009BANDINGCHECKS = onCleanup(@() reset_icpm2009bandingchecks(oldBandingChecks));
-
-  levelResults = repmat(emptyLevelResult(), length(hvals), 1);
-  levelResultsNoRotation = repmat(emptyLevelResult(), length(hvals), 1);
-
-  for k = 1:length(hvals)
-    levelResults(k) = solveOneLevel(hvals(k), R, a, p, order, ...
-                                    makePlots, showDiagnostics, solver, ...
-                                    directMaxUnknowns, iterTol, iterMaxit, ...
-                                    gmresRestart, true, beta);
-    levelResultsNoRotation(k) = solveOneLevel(hvals(k), R, a, p, order, ...
-                                    false, showDiagnostics, solver, ...
-                                    directMaxUnknowns, iterTol, iterMaxit, ...
-                                    gmresRestart, false, beta);
-  end
-
-  results.h = hvals;
-  results.N = 1 ./ hvals;
-  results.errorsLinf = [levelResults.errorLinf];
-  results.errorsL2 = [levelResults.errorL2];
-  results.ratesLinf = convergenceRates(results.h, results.errorsLinf);
-  results.ratesL2 = convergenceRates(results.h, results.errorsL2);
-  results.branchErrorsA = [[levelResults.errorLinfA].' [levelResults.errorL2A].'];
-  results.branchErrorsB = [[levelResults.errorLinfB].' [levelResults.errorL2B].'];
-  results.bandErrorsLinf = [levelResults.bandErrorLinf];
-  results.bandErrorsL2 = [levelResults.bandErrorL2];
-  results.crossRowsA = [levelResults.crossRowsA];
-  results.crossRowsB = [levelResults.crossRowsB];
-  results.maxExtensionRowSumError = [levelResults.maxExtensionRowSumError];
-  results.maxSingularBranchDifference = [levelResults.maxSingularBranchDifference];
-  results.levels = levelResults;
-
-  results.noRotation.h = hvals;
-  results.noRotation.N = 1 ./ hvals;
-  results.noRotation.errorsLinf = [levelResultsNoRotation.errorLinf];
-  results.noRotation.errorsL2 = [levelResultsNoRotation.errorL2];
-  results.noRotation.ratesLinf = convergenceRates(hvals, results.noRotation.errorsLinf);
-  results.noRotation.ratesL2 = convergenceRates(hvals, results.noRotation.errorsL2);
-  results.noRotation.levels = levelResultsNoRotation;
-
-  if (showDiagnostics)
-    printConvergenceTable(results);
-  end
-
-  if (makePlots)
-    plotConvergenceSummary(results);
-  end
+%
+% Every level is solved twice, once with the rotation and once without, so
+% that the second-order rate with it can be read against the first-order
+% rate without it.
+%
+% Run headlessly, from this directory:
+%   matlab -batch "example_two_sphere_intersection_icpm_rotation_convergence"
+% The geometry, the grid sizes, the plotting flags and the solver settings
+% are all edited below.  hvals is the one to shorten for a quick run.
 
 
-function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics, ...
-                               solver, directMaxUnknowns, iterTol, iterMaxit, ...
-                               gmresRestart, useRotation, beta)
+%% Using cp_matrices
 
-  dim = 3;
-  fd_stenrad = order/2;
+% Include the cp_matrices folder (edit as appropriate)
+addpath('../cp_matrices');
+
+% add functions for finding the closest points
+addpath('../surfaces');
+
+
+global ICPM2009BANDINGCHECKS
+
+% this is a bit dangerous: will break other less tightly banded
+% codes, restore whatever the caller had on the way out.
+% NB: the onCleanup object is created before the global is set.  This is a
+% script, so cleanup_bandingchecks survives in the workspace; re-running
+% destroys the previous object, and its destructor must not fire after the
+% line that switches the checks on.
+old_bandingchecks = ICPM2009BANDINGCHECKS;
+cleanup_bandingchecks = ...
+    onCleanup(@() reset_icpm2009bandingchecks(old_bandingchecks));
+ICPM2009BANDINGCHECKS = 1;
+
+
+%% Problem parameters
+
+R = 1;        % sphere radius
+a = 0.5;      % half the distance between the two sphere centers
+p = 3;        % interpolation degree
+order = 2;    % Laplacian order
+beta = 1.0;   % weight of the symmetry-breaking even mode in the MMS
+
+% grid sizes for the convergence study
+hvals = 1./[20 40 80];
+
+makePlots = true;
+showdiag = true;
+
+% 'auto' assembles M and uses backslash while the system is small enough,
+% and falls back on matrix-free GMRES above that
+solver = 'auto';
+direct_max_unknowns = 2e5;
+itertol = 1e-8;
+itermaxit = 100;
+gmres_restart = 50;
+
+if (a <= 0 || a >= R)
+  error('Expected 0 < a < R.');
+end
+
+hvals = hvals(:).';
+if (any(hvals <= 0))
+  error('All h values must be positive.');
+end
+
+
+%% Convergence study
+% Each level is solved twice: with the branch rotation, and without it.
+
+lev = repmat(empty_level_result(), length(hvals), 1);
+lev_norot = repmat(empty_level_result(), length(hvals), 1);
+
+for k = 1:length(hvals)
+  lev(k) = solve_one_level(hvals(k), R, a, p, order, ...
+                           makePlots, showdiag, solver, ...
+                           direct_max_unknowns, itertol, itermaxit, ...
+                           gmres_restart, true, beta);
+  lev_norot(k) = solve_one_level(hvals(k), R, a, p, order, ...
+                                 false, showdiag, solver, ...
+                                 direct_max_unknowns, itertol, itermaxit, ...
+                                 gmres_restart, false, beta);
+end
+
+results.h = hvals;
+results.N = 1 ./ hvals;
+results.errs_inf = [lev.err_inf];
+results.errs_l2 = [lev.err_l2];
+results.rates_inf = conv_rates(results.h, results.errs_inf);
+results.rates_l2 = conv_rates(results.h, results.errs_l2);
+results.branch_errsA = [[lev.err_infA].' [lev.err_l2A].'];
+results.branch_errsB = [[lev.err_infB].' [lev.err_l2B].'];
+results.band_errs_inf = [lev.band_err_inf];
+results.band_errs_l2 = [lev.band_err_l2];
+results.crossrowsA = [lev.crossrowsA];
+results.crossrowsB = [lev.crossrowsB];
+results.max_rowsum_err = [lev.max_rowsum_err];
+results.max_singular_diff = [lev.max_singular_diff];
+results.levels = lev;
+
+results.norot.h = hvals;
+results.norot.N = 1 ./ hvals;
+results.norot.errs_inf = [lev_norot.err_inf];
+results.norot.errs_l2 = [lev_norot.err_l2];
+results.norot.rates_inf = conv_rates(hvals, results.norot.errs_inf);
+results.norot.rates_l2 = conv_rates(hvals, results.norot.errs_l2);
+results.norot.levels = lev_norot;
+
+if (showdiag)
+  printconv(results);
+end
+
+if (makePlots)
+  plotconv(results);
+end
+
+
+%% ----------------------------------------------------------------------
+%% local functions
+%% ----------------------------------------------------------------------
+
+function lev = solve_one_level(h, R, a, p, order, makePlots, showdiag, ...
+                               solver, direct_max_unknowns, itertol, ...
+                               itermaxit, gmres_restart, userot, beta)
+%SOLVE_ONE_LEVEL  build the two glued caps at one grid size and solve
+
+  dim = 3;  % dimension
+  fd_stenrad = order/2;  % finite difference stencil radius
+  % The formula for bw is found in [Ruuth & Merriman 2008] and the 1.0002
+  % is a safety factor.
   bw = 1.0002*sqrt((dim-1)*((p+1)/2)^2 + ...
                    ((fd_stenrad+(p+1)/2)^2));
 
-  circleRadius = sqrt(R^2 - a^2);
+  circrad = sqrt(R^2 - a^2);
   pad = (bw + fd_stenrad + (p+1)/2 + 2)*h;
   xmax = h*ceil((R - a + pad)/h);
-  yzmax = h*ceil((circleRadius + pad)/h);
+  yzmax = h*ceil((circrad + pad)/h);
   x1d = (-xmax:h:xmax).';
   y1d = (-yzmax:h:yzmax).';
   z1d = y1d;
@@ -121,53 +158,55 @@ function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics, ..
   [cpxA, cpyA, cpzA, distA, bdyA] = cpSphereCap(xx, yy, zz, R, cenA, sideA);
   [cpxB, cpyB, cpzB, distB, bdyB] = cpSphereCap(xx, yy, zz, R, cenB, sideB);
 
-  bandInitA = find(abs(distA) <= bw*h);
-  bandInitB = find(abs(distB) <= bw*h);
+  band_initA = find(abs(distA) <= bw*h);
+  band_initB = find(abs(distB) <= bw*h);
 
-  cpxInitA = cpxA(bandInitA);  cpyInitA = cpyA(bandInitA);
-  cpzInitA = cpzA(bandInitA);
-  xInitA = xx(bandInitA);  yInitA = yy(bandInitA);  zInitA = zz(bandInitA);
-  bdyInitA = bdyA(bandInitA);
+  cpxg_initA = cpxA(band_initA);  cpyg_initA = cpyA(band_initA);
+  cpzg_initA = cpzA(band_initA);
+  xg_initA = xx(band_initA);  yg_initA = yy(band_initA);  zg_initA = zz(band_initA);
+  bdyg_initA = bdyA(band_initA);
 
-  cpxInitB = cpxB(bandInitB);  cpyInitB = cpyB(bandInitB);
-  cpzInitB = cpzB(bandInitB);
-  xInitB = xx(bandInitB);  yInitB = yy(bandInitB);  zInitB = zz(bandInitB);
-  bdyInitB = bdyB(bandInitB);
+  cpxg_initB = cpxB(band_initB);  cpyg_initB = cpyB(band_initB);
+  cpzg_initB = cpzB(band_initB);
+  xg_initB = xx(band_initB);  yg_initB = yy(band_initB);  zg_initB = zz(band_initB);
+  bdyg_initB = bdyB(band_initB);
 
-  if (showDiagnostics)
-    if (useRotation)
-      methodLabel = 'with rotation';
+  if (showdiag)
+    if (userot)
+      methodlabel = 'with rotation';
     else
-      methodLabel = 'without rotation';
+      methodlabel = 'without rotation';
     end
     fprintf('\nh = %g (%s), grid %d x %d x %d\n', ...
-            h, methodLabel, length(x1d), length(y1d), length(z1d));
-    fprintf('Initial bands A/B: %d / %d\n', length(bandInitA), length(bandInitB));
+            h, methodlabel, length(x1d), length(y1d), length(z1d));
+    fprintf('Initial bands A/B: %d / %d\n', length(band_initA), length(band_initB));
   end
 
   [LA, EAA, RA, ibandA, obandA, ibandfullA, obandfullA] = ...
-      ops_and_bands3d(x1d, y1d, z1d, xInitA, yInitA, zInitA, ...
-                      cpxInitA, cpyInitA, cpzInitA, bandInitA, p, order);
+      ops_and_bands3d(x1d, y1d, z1d, xg_initA, yg_initA, zg_initA, ...
+                      cpxg_initA, cpyg_initA, cpzg_initA, band_initA, p, order);
   [LB, EBB, RB, ibandB, obandB, ibandfullB, obandfullB] = ...
-      ops_and_bands3d(x1d, y1d, z1d, xInitB, yInitB, zInitB, ...
-                      cpxInitB, cpyInitB, cpzInitB, bandInitB, p, order);
+      ops_and_bands3d(x1d, y1d, z1d, xg_initB, yg_initB, zg_initB, ...
+                      cpxg_initB, cpyg_initB, cpzg_initB, band_initB, p, order);
 
-  cpxOutA = cpxInitA(obandA);  cpyOutA = cpyInitA(obandA);
-  cpzOutA = cpzInitA(obandA);
-  xOutA = xInitA(obandA);  yOutA = yInitA(obandA);  zOutA = zInitA(obandA);
-  bdyOutA = bdyInitA(obandA);
+  cpxgoutA = cpxg_initA(obandA);  cpygoutA = cpyg_initA(obandA);
+  cpzgoutA = cpzg_initA(obandA);
+  xgoutA = xg_initA(obandA);  ygoutA = yg_initA(obandA);  zgoutA = zg_initA(obandA);
+  bdygoutA = bdyg_initA(obandA);
 
-  cpxOutB = cpxInitB(obandB);  cpyOutB = cpyInitB(obandB);
-  cpzOutB = cpzInitB(obandB);
-  xOutB = xInitB(obandB);  yOutB = yInitB(obandB);  zOutB = zInitB(obandB);
-  bdyOutB = bdyInitB(obandB);
+  cpxgoutB = cpxg_initB(obandB);  cpygoutB = cpyg_initB(obandB);
+  cpzgoutB = cpzg_initB(obandB);
+  xgoutB = xg_initB(obandB);  ygoutB = yg_initB(obandB);  zgoutB = zg_initB(obandB);
+  bdygoutB = bdyg_initB(obandB);
 
-  cpxInA = RA*cpxOutA;  cpyInA = RA*cpyOutA;  cpzInA = RA*cpzOutA;
-  cpxInB = RB*cpxOutB;  cpyInB = RB*cpyOutB;  cpzInB = RB*cpzOutB;
+  cpxginA = RA*cpxgoutA;  cpyginA = RA*cpygoutA;  cpzginA = RA*cpzgoutA;
+  cpxginB = RB*cpxgoutB;  cpyginB = RB*cpygoutB;  cpzginB = RB*cpzgoutB;
 
-  circleTol = 100*eps(max(1, R));
-  crossRowsA = find(bdyOutA | (abs(cpxOutA) <= circleTol));
-  crossRowsB = find(bdyOutB | (abs(cpxOutB) <= circleTol));
+  % the rows to send across: those whose closest point sits on the shared
+  % singular circle x = 0
+  circtol = 100*eps(max(1, R));
+  crossrowsA = find(bdygoutA | (abs(cpxgoutA) <= circtol));
+  crossrowsB = find(bdygoutB | (abs(cpxgoutB) <= circtol));
 
   EAB = sparse(size(EAA, 1), size(EBB, 2));
   EBA = sparse(size(EBB, 1), size(EAA, 2));
@@ -175,48 +214,50 @@ function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics, ..
   thetaAtoB = [];
   thetaBtoA = [];
 
-  if (~isempty(crossRowsA))
-    pA = [xOutA(crossRowsA) yOutA(crossRowsA) zOutA(crossRowsA)];
-    if (useRotation)
-      sA = [cpxOutA(crossRowsA) cpyOutA(crossRowsA) cpzOutA(crossRowsA)];
-      [rotA, thetaAtoB] = rotateBranchPoints(pA, sA, R, cenA, cenB, sideA, sideB);
+  if (~isempty(crossrowsA))
+    ptsA = [xgoutA(crossrowsA) ygoutA(crossrowsA) zgoutA(crossrowsA)];
+    if (userot)
+      singA = [cpxgoutA(crossrowsA) cpygoutA(crossrowsA) cpzgoutA(crossrowsA)];
+      [rotA, thetaAtoB] = rotate_branch_points(ptsA, singA, R, cenA, cenB, ...
+                                               sideA, sideB);
     else
-      rotA = pA;
+      rotA = ptsA;
     end
     [cpxAtoB, cpyAtoB, cpzAtoB] = cpSphereCap(rotA(:,1), rotA(:,2), rotA(:,3), ...
                                               R, cenB, sideB);
-    EAB(crossRowsA,:) = interp3_matrix(x1d, y1d, z1d, ...
+    EAB(crossrowsA,:) = interp3_matrix(x1d, y1d, z1d, ...
                                        cpxAtoB(:), cpyAtoB(:), cpzAtoB(:), ...
                                        p, ibandfullB);
-    EAA(crossRowsA,:) = 0;
+    EAA(crossrowsA,:) = 0;
   end
 
-  if (~isempty(crossRowsB))
-    pB = [xOutB(crossRowsB) yOutB(crossRowsB) zOutB(crossRowsB)];
-    if (useRotation)
-      sB = [cpxOutB(crossRowsB) cpyOutB(crossRowsB) cpzOutB(crossRowsB)];
-      [rotB, thetaBtoA] = rotateBranchPoints(pB, sB, R, cenB, cenA, sideB, sideA);
+  if (~isempty(crossrowsB))
+    ptsB = [xgoutB(crossrowsB) ygoutB(crossrowsB) zgoutB(crossrowsB)];
+    if (userot)
+      singB = [cpxgoutB(crossrowsB) cpygoutB(crossrowsB) cpzgoutB(crossrowsB)];
+      [rotB, thetaBtoA] = rotate_branch_points(ptsB, singB, R, cenB, cenA, ...
+                                               sideB, sideA);
     else
-      rotB = pB;
+      rotB = ptsB;
     end
     [cpxBtoA, cpyBtoA, cpzBtoA] = cpSphereCap(rotB(:,1), rotB(:,2), rotB(:,3), ...
                                               R, cenA, sideA);
-    EBA(crossRowsB,:) = interp3_matrix(x1d, y1d, z1d, ...
+    EBA(crossrowsB,:) = interp3_matrix(x1d, y1d, z1d, ...
                                        cpxBtoA(:), cpyBtoA(:), cpzBtoA(:), ...
                                        p, ibandfullA);
-    EBB(crossRowsB,:) = 0;
+    EBB(crossrowsB,:) = 0;
   end
 
-  rhsA = rhsMmsBranch(cpxInA, cpyInA, cpzInA, 'A', cenA, a, R, beta);
-  rhsB = rhsMmsBranch(cpxInB, cpyInB, cpzInB, 'B', cenB, a, R, beta);
+  rhsA = mms_rhs(cpxginA, cpyginA, cpzginA, 'A', cenA, a, R, beta);
+  rhsB = mms_rhs(cpxginB, cpyginB, cpzginB, 'B', cenB, a, R, beta);
   rhs = [rhsA; rhsB];
   if (any(~isfinite(rhs)))
     error('Non-finite MMS right-hand side encountered at branch closest points.');
   end
 
-  u = solveIcpLinearSystem(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
-                           solver, directMaxUnknowns, iterTol, iterMaxit, ...
-                           gmresRestart, showDiagnostics);
+  u = solve_icp_system(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
+                       solver, direct_max_unknowns, itertol, itermaxit, ...
+                       gmres_restart, showdiag);
   if (any(~isfinite(u)))
     error('Non-finite ICPM solution encountered after solving the elliptic system.');
   end
@@ -224,121 +265,130 @@ function level = solveOneLevel(h, R, a, p, order, makePlots, showDiagnostics, ..
   uA = u(1:length(rhsA));
   uB = u(length(rhsA)+1:end);
 
-  bandExactA = exactMmsBranch(cpxInA, cpyInA, cpzInA, 'A', cenA, a, R, beta);
-  bandExactB = exactMmsBranch(cpxInB, cpyInB, cpzInB, 'B', cenB, a, R, beta);
-  bandErrA = uA - bandExactA;
-  bandErrB = uB - bandExactB;
 
-  if (any(~isfinite([bandExactA; bandExactB; bandErrA; bandErrB])))
+  %% Errors, on the band and on the surface
+
+  band_exactA = mms_exact(cpxginA, cpyginA, cpzginA, 'A', cenA, a, R, beta);
+  band_exactB = mms_exact(cpxginB, cpyginB, cpzginB, 'B', cenB, a, R, beta);
+  band_errA = uA - band_exactA;
+  band_errB = uB - band_exactB;
+
+  if (any(~isfinite([band_exactA; band_exactB; band_errA; band_errB])))
     error('Non-finite MMS exact values or errors encountered; check closest points and RHS.');
   end
 
-  bandErrorLinfA = norm(bandErrA, inf);
-  bandErrorLinfB = norm(bandErrB, inf);
-  bandErrorL2A = sqrt(mean(bandErrA.^2));
-  bandErrorL2B = sqrt(mean(bandErrB.^2));
+  band_err_infA = norm(band_errA, inf);
+  band_err_infB = norm(band_errB, inf);
+  band_err_l2A = sqrt(mean(band_errA.^2));
+  band_err_l2B = sqrt(mean(band_errB.^2));
 
-  [errorLinfA, errorL2A, surfaceWeightA, surfaceEvalPointsA] = ...
-      surfaceCapError(x1d, y1d, z1d, ibandfullA, uA, p, 'A', cenA, a, R, h, beta);
-  [errorLinfB, errorL2B, surfaceWeightB, surfaceEvalPointsB] = ...
-      surfaceCapError(x1d, y1d, z1d, ibandfullB, uB, p, 'B', cenB, a, R, h, beta);
-  surfaceWeight = surfaceWeightA + surfaceWeightB;
-  errorLinf = max(errorLinfA, errorLinfB);
-  errorL2 = sqrt((surfaceWeightA*errorL2A^2 + surfaceWeightB*errorL2B^2) / surfaceWeight);
+  [err_infA, err_l2A, swtA, nevalA] = ...
+      surface_error(x1d, y1d, z1d, ibandfullA, uA, p, 'A', cenA, a, R, h, beta);
+  [err_infB, err_l2B, swtB, nevalB] = ...
+      surface_error(x1d, y1d, z1d, ibandfullB, uB, p, 'B', cenB, a, R, h, beta);
+  swt = swtA + swtB;
+  err_inf = max(err_infA, err_infB);
+  err_l2 = sqrt((swtA*err_l2A^2 + swtB*err_l2B^2) / swt);
 
-  if (any(~isfinite([errorLinfA; errorLinfB; errorLinf; errorL2A; errorL2B; errorL2])))
+  if (any(~isfinite([err_infA; err_infB; err_inf; err_l2A; err_l2B; err_l2])))
     error('Non-finite surface error diagnostic encountered.');
   end
 
-  rowSums = full([sum(EAA, 2) + sum(EAB, 2); ...
+  % every extension row should still be an interpolation: its weights sum
+  % to one whichever branch they were fetched from
+  rowsums = full([sum(EAA, 2) + sum(EAB, 2); ...
                   sum(EBA, 2) + sum(EBB, 2)]);
-  maxRowSumError = max(abs(rowSums - 1));
+  max_rowsum_err = max(abs(rowsums - 1));
 
-  [maxSingularDiff, singularExactError] = singularCircleDiagnostic( ...
-      x1d, y1d, z1d, ibandfullA, ibandfullB, uA, uB, p, circleRadius, h, ...
+  [max_singular_diff, singular_exact_err] = singular_circle_diag( ...
+      x1d, y1d, z1d, ibandfullA, ibandfullB, uA, uB, p, circrad, h, ...
       cenA, a, R, beta);
 
-  if (showDiagnostics)
+  if (showdiag)
     fprintf('Inner bands A/B: %d / %d\n', length(ibandfullA), length(ibandfullB));
     fprintf('Outer bands A/B: %d / %d\n', length(obandfullA), length(obandfullB));
-    fprintf('Cross rows A->B / B->A: %d / %d\n', length(crossRowsA), length(crossRowsB));
-    if (useRotation)
-      fprintf('Rotation angles A->B range: [%g %g]\n', minValue(thetaAtoB), maxValue(thetaAtoB));
-      fprintf('Rotation angles B->A range: [%g %g]\n', minValue(thetaBtoA), maxValue(thetaBtoA));
+    fprintf('Cross rows A->B / B->A: %d / %d\n', length(crossrowsA), length(crossrowsB));
+    if (userot)
+      fprintf('Rotation angles A->B range: [%g %g]\n', minval(thetaAtoB), maxval(thetaAtoB));
+      fprintf('Rotation angles B->A range: [%g %g]\n', minval(thetaBtoA), maxval(thetaBtoA));
     end
-    fprintf('E row-sum max error: %g\n', maxRowSumError);
-    fprintf('Singular-circle branch max difference: %g\n', maxSingularDiff);
-    fprintf('Singular-circle exact max error: %g\n', singularExactError);
-    fprintf('Surface eval points A/B: %d / %d\n', surfaceEvalPointsA, surfaceEvalPointsB);
+    fprintf('E row-sum max error: %g\n', max_rowsum_err);
+    fprintf('Singular-circle branch max difference: %g\n', max_singular_diff);
+    fprintf('Singular-circle exact max error: %g\n', singular_exact_err);
+    fprintf('Surface eval points A/B: %d / %d\n', nevalA, nevalB);
     fprintf('Surface errors Linf A/B/combined: %g / %g / %g\n', ...
-            errorLinfA, errorLinfB, errorLinf);
+            err_infA, err_infB, err_inf);
     fprintf('Surface errors L2   A/B/combined: %g / %g / %g\n', ...
-            errorL2A, errorL2B, errorL2);
+            err_l2A, err_l2B, err_l2);
     fprintf('Band errors Linf A/B/combined: %g / %g / %g\n', ...
-            bandErrorLinfA, bandErrorLinfB, max(bandErrorLinfA, bandErrorLinfB));
+            band_err_infA, band_err_infB, max(band_err_infA, band_err_infB));
     fprintf('Band errors RMS  A/B/combined: %g / %g / %g\n', ...
-            bandErrorL2A, bandErrorL2B, sqrt(mean([bandErrA; bandErrB].^2)));
+            band_err_l2A, band_err_l2B, sqrt(mean([band_errA; band_errB].^2)));
   end
 
   if (makePlots)
-    plotLensSolution(x1d, y1d, z1d, ibandfullA, uA, ibandfullB, uB, ...
-                     p, cenA, cenB, a, R, h);
+    plotlens(x1d, y1d, z1d, ibandfullA, uA, ibandfullB, uB, ...
+             p, cenA, cenB, a, R, h);
   end
 
-  level = emptyLevelResult();
-  level.h = h;
-  level.errorLinfA = errorLinfA;
-  level.errorLinfB = errorLinfB;
-  level.errorLinf = errorLinf;
-  level.errorL2A = errorL2A;
-  level.errorL2B = errorL2B;
-  level.errorL2 = errorL2;
-  level.bandErrorLinfA = bandErrorLinfA;
-  level.bandErrorLinfB = bandErrorLinfB;
-  level.bandErrorLinf = max(bandErrorLinfA, bandErrorLinfB);
-  level.bandErrorL2A = bandErrorL2A;
-  level.bandErrorL2B = bandErrorL2B;
-  level.bandErrorL2 = sqrt(mean([bandErrA; bandErrB].^2));
-  level.surfaceEvalPointsA = surfaceEvalPointsA;
-  level.surfaceEvalPointsB = surfaceEvalPointsB;
-  level.crossRowsA = length(crossRowsA);
-  level.crossRowsB = length(crossRowsB);
-  level.innerBandA = length(ibandfullA);
-  level.innerBandB = length(ibandfullB);
-  level.outerBandA = length(obandfullA);
-  level.outerBandB = length(obandfullB);
-  level.maxExtensionRowSumError = maxRowSumError;
-  level.maxSingularBranchDifference = maxSingularDiff;
-  level.maxSingularExactError = singularExactError;
+  lev = empty_level_result();
+  lev.h = h;
+  lev.err_infA = err_infA;
+  lev.err_infB = err_infB;
+  lev.err_inf = err_inf;
+  lev.err_l2A = err_l2A;
+  lev.err_l2B = err_l2B;
+  lev.err_l2 = err_l2;
+  lev.band_err_infA = band_err_infA;
+  lev.band_err_infB = band_err_infB;
+  lev.band_err_inf = max(band_err_infA, band_err_infB);
+  lev.band_err_l2A = band_err_l2A;
+  lev.band_err_l2B = band_err_l2B;
+  lev.band_err_l2 = sqrt(mean([band_errA; band_errB].^2));
+  lev.nevalA = nevalA;
+  lev.nevalB = nevalB;
+  lev.crossrowsA = length(crossrowsA);
+  lev.crossrowsB = length(crossrowsB);
+  lev.innerbandA = length(ibandfullA);
+  lev.innerbandB = length(ibandfullB);
+  lev.outerbandA = length(obandfullA);
+  lev.outerbandB = length(obandfullB);
+  lev.max_rowsum_err = max_rowsum_err;
+  lev.max_singular_diff = max_singular_diff;
+  lev.max_singular_exact_err = singular_exact_err;
+end
 
 
-function u = solveIcpLinearSystem(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
-                                  solver, directMaxUnknowns, iterTol, iterMaxit, ...
-                                  gmresRestart, showDiagnostics)
+function u = solve_icp_system(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
+                              solver, direct_max_unknowns, itertol, ...
+                              itermaxit, gmres_restart, showdiag)
+%SOLVE_ICP_SYSTEM  (I - M) u = rhs for the two coupled branches
+%   Assembles M and uses backslash when the system is small enough,
+%   otherwise applies M matrix-free under restarted GMRES.
 
-  solver = normalizeSolverName(solver);
+  solver = normalize_solver(solver);
 
   nA = size(LA, 1);
   nB = size(LB, 1);
   n = nA + nB;
 
-  [LdiagA, LoffA] = splitLapsharpOperator(LA, RA);
-  [LdiagB, LoffB] = splitLapsharpOperator(LB, RB);
+  [LdiagA, LoffA] = split_lapsharp(LA, RA);
+  [LdiagB, LoffB] = split_lapsharp(LB, RB);
 
-  useDirect = strcmp(solver, 'direct') || ...
-              (strcmp(solver, 'auto') && n <= directMaxUnknowns);
+  usedirect = strcmp(solver, 'direct') || ...
+              (strcmp(solver, 'auto') && n <= direct_max_unknowns);
 
-  if (showDiagnostics)
+  if (showdiag)
     fprintf('Linear solve unknowns A/B/total: %d / %d / %d\n', nA, nB, n);
     fprintf('Interpolation nnz EAA/EBB/EAB/EBA: %d / %d / %d / %d\n', ...
             nnz(EAA), nnz(EBB), nnz(EAB), nnz(EBA));
     fprintf('Estimated E sparse storage: %.1f MB\n', ...
-            sparseStorageMB(EAA, EBB, EAB, EBA));
+            sparse_storage_mb(EAA, EBB, EAB, EBA));
     fprintf('L off-diagonal nnz A/B: %d / %d\n', nnz(LoffA), nnz(LoffB));
   end
 
-  if (useDirect)
-    if (showDiagnostics)
+  if (usedirect)
+    if (showdiag)
       fprintf('Linear solver: direct sparse backslash\n');
     end
 
@@ -349,31 +399,31 @@ function u = solveIcpLinearSystem(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
     M = [MAA MAB; MBA MBB];
     A = speye(n) - M;
 
-    if (showDiagnostics)
+    if (showdiag)
       fprintf('Explicit M nnz: %d, estimated sparse storage: %.1f MB\n', ...
-              nnz(M), sparseStorageMB(M));
+              nnz(M), sparse_storage_mb(M));
     end
 
     u = A \ rhs;
   else
-    if (showDiagnostics)
+    if (showdiag)
       fprintf('Linear solver: matrix-free restarted GMRES');
       if (strcmp(solver, 'auto'))
-        fprintf(' (auto: direct threshold %d unknowns)', directMaxUnknowns);
+        fprintf(' (auto: direct threshold %d unknowns)', direct_max_unknowns);
       end
       fprintf('\n');
       fprintf('Explicit M is not assembled in this solve path.\n');
     end
 
-    afun = @(v) applyIcpLinearSystem(v, LdiagA, LoffA, EAA, EAB, ...
-                                    LdiagB, LoffB, EBA, EBB);
-    precondDiag = 1 - [LdiagA; LdiagB];
-    precondDiag(abs(precondDiag) < eps) = 1;
-    mfun = @(v) v ./ precondDiag;
+    afun = @(v) apply_icp_system(v, LdiagA, LoffA, EAA, EAB, ...
+                                 LdiagB, LoffB, EBA, EBB);
+    preconddiag = 1 - [LdiagA; LdiagB];
+    preconddiag(abs(preconddiag) < eps) = 1;
+    mfun = @(v) v ./ preconddiag;
 
-    [u, flag, relres, iter] = gmres(afun, rhs, gmresRestart, iterTol, ...
-                                    iterMaxit, mfun);
-    if (showDiagnostics)
+    [u, flag, relres, iter] = gmres(afun, rhs, gmres_restart, itertol, ...
+                                    itermaxit, mfun);
+    if (showdiag)
       fprintf('GMRES flag: %d, relres: %g, iter: %s\n', ...
               flag, relres, mat2str(iter));
     end
@@ -383,10 +433,12 @@ function u = solveIcpLinearSystem(LA, EAA, EAB, RA, LB, EBA, EBB, RB, rhs, ...
               flag, relres);
     end
   end
+end
 
 
-function y = applyIcpLinearSystem(v, LdiagA, LoffA, EAA, EAB, ...
-                                  LdiagB, LoffB, EBA, EBB)
+function y = apply_icp_system(v, LdiagA, LoffA, EAA, EAB, ...
+                              LdiagB, LoffB, EBA, EBB)
+%APPLY_ICP_SYSTEM  y = (I - M) v without assembling M
 
   nA = length(LdiagA);
   vA = v(1:nA);
@@ -399,19 +451,22 @@ function y = applyIcpLinearSystem(v, LdiagA, LoffA, EAA, EAB, ...
   mvB = LdiagB.*vB + LoffB*extB;
 
   y = v - [mvA; mvB];
+end
 
 
-function [Ldiag, Loff] = splitLapsharpOperator(L, R)
+function [Ldiag, Loff] = split_lapsharp(L, R)
+%SPLIT_LAPSHARP  the self-column of L, and everything else
 
   Ldiagpad = R .* L;
   Ldiag = full(sum(Ldiagpad, 2));
   Loff = L - Ldiagpad;
+end
 
 
-function solver = normalizeSolverName(solver)
+function solver = normalize_solver(solver)
 
   if (~ischar(solver))
-    error('opts.solver must be ''auto'', ''direct'', or ''gmres''.');
+    error('solver must be ''auto'', ''direct'', or ''gmres''.');
   end
 
   solver = lower(solver);
@@ -423,11 +478,12 @@ function solver = normalizeSolverName(solver)
 
   if (~strcmp(solver, 'auto') && ~strcmp(solver, 'direct') && ...
       ~strcmp(solver, 'gmres'))
-    error('opts.solver must be ''auto'', ''direct'', or ''gmres''.');
+    error('solver must be ''auto'', ''direct'', or ''gmres''.');
   end
+end
 
 
-function mb = sparseStorageMB(varargin)
+function mb = sparse_storage_mb(varargin)
 
   bytes = 0;
   for k = 1:nargin
@@ -435,154 +491,174 @@ function mb = sparseStorageMB(varargin)
     bytes = bytes + 16*nnz(A) + 8*(size(A, 2) + 1);
   end
   mb = bytes / 1024^2;
+end
 
 
 function [cpx, cpy, cpz, dist, bdy] = cpSphereCap(x, y, z, R, cen, side)
-% Closest point to a sphere cap cut by x = 0.
-% side =  1 gives the cap x >= 0.
-% side = -1 gives the cap x <= 0.
+%CPSPHERECAP  closest point to a sphere cap cut by x = 0
+%   side =  1 gives the cap x >= 0.
+%   side = -1 gives the cap x <= 0.
 
   xs = x - cen(1);
   ys = y - cen(2);
   zs = z - cen(3);
   rr = sqrt(xs.^2 + ys.^2 + zs.^2);
 
-  rrSafe = rr;
-  rrSafe(rrSafe == 0) = 1;
+  rr_safe = rr;
+  rr_safe(rr_safe == 0) = 1;
 
-  cpx = cen(1) + R*xs ./ rrSafe;
-  cpy = cen(2) + R*ys ./ rrSafe;
-  cpz = cen(3) + R*zs ./ rrSafe;
+  cpx = cen(1) + R*xs ./ rr_safe;
+  cpy = cen(2) + R*ys ./ rr_safe;
+  cpz = cen(3) + R*zs ./ rr_safe;
 
-  zeroRows = (rr == 0);
-  if (any(zeroRows(:)))
-    cpx(zeroRows) = cen(1) + R;
-    cpy(zeroRows) = cen(2);
-    cpz(zeroRows) = cen(3);
+  zerorows = (rr == 0);
+  if (any(zerorows(:)))
+    cpx(zerorows) = cen(1) + R;
+    cpy(zerorows) = cen(2);
+    cpz(zerorows) = cen(3);
   end
 
-  insideCap = (side*cpx >= 0);
-  bdy = ~insideCap;
+  insidecap = (side*cpx >= 0);
+  bdy = ~insidecap;
 
   if (any(bdy(:)))
-    circleRadius = sqrt(R^2 - cen(1)^2);
+    circrad = sqrt(R^2 - cen(1)^2);
     rho = sqrt(y.^2 + z.^2);
-    rhoSafe = rho;
-    rhoSafe(rhoSafe == 0) = 1;
+    rho_safe = rho;
+    rho_safe(rho_safe == 0) = 1;
 
-    cpxCircle = zeros(size(x));
-    cpyCircle = circleRadius*y ./ rhoSafe;
-    cpzCircle = circleRadius*z ./ rhoSafe;
+    cpx_circ = zeros(size(x));
+    cpy_circ = circrad*y ./ rho_safe;
+    cpz_circ = circrad*z ./ rho_safe;
 
-    axisRows = (rho == 0);
-    if (any(axisRows(:)))
-      cpyCircle(axisRows) = circleRadius;
-      cpzCircle(axisRows) = 0;
+    axisrows = (rho == 0);
+    if (any(axisrows(:)))
+      cpy_circ(axisrows) = circrad;
+      cpz_circ(axisrows) = 0;
     end
 
-    cpx(bdy) = cpxCircle(bdy);
-    cpy(bdy) = cpyCircle(bdy);
-    cpz(bdy) = cpzCircle(bdy);
+    cpx(bdy) = cpx_circ(bdy);
+    cpy(bdy) = cpy_circ(bdy);
+    cpz(bdy) = cpz_circ(bdy);
   end
 
   dist = sqrt((x - cpx).^2 + (y - cpy).^2 + (z - cpz).^2);
+end
 
 
-function [rotatedPoints, theta] = rotateBranchPoints(points, singularPoints, R, ...
-                                                     fromCenter, toCenter, ...
-                                                     fromSide, toSide)
+function [rotpts, theta] = rotate_branch_points(pts, singpts, R, ...
+                                                cen_from, cen_to, ...
+                                                side_from, side_to)
+%ROTATE_BRANCH_POINTS  turn the embedding points about the singular circle
+%   The rotation axis is tau, the tangent of the singular circle.  The
+%   estimated conormal of the branch the point came from is turned onto
+%   minus the conormal of the branch it is going to.
 
-  nFrom = normalizeRows(bsxfun(@minus, singularPoints, fromCenter) ./ R);
-  nTo = normalizeRows(bsxfun(@minus, singularPoints, toCenter) ./ R);
+  n_from = normalize_rows(bsxfun(@minus, singpts, cen_from) ./ R);
+  n_to = normalize_rows(bsxfun(@minus, singpts, cen_to) ./ R);
 
-  if (fromSide == 1)
-    tau = normalizeRows(cross(nFrom, nTo, 2));
+  if (side_from == 1)
+    tau = normalize_rows(cross(n_from, n_to, 2));
   else
-    tau = normalizeRows(cross(nTo, nFrom, 2));
+    tau = normalize_rows(cross(n_to, n_from, 2));
   end
 
-  etaFromProbe = capConormal(nFrom, fromSide);
-  etaTo = capConormal(nTo, toSide);
-  targetDirection = -etaTo;
-  Rk = cell(size(points, 1), 1);
-  theta = NaN(size(points, 1), 1);
-  cpfFrom = @(x, y, z) cpSphereCap(x, y, z, R, fromCenter, fromSide);
+  eta_probe = cap_conormal(n_from, side_from);
+  eta_to = cap_conormal(n_to, side_to);
+  targetdir = -eta_to;
+  Rk = cell(size(pts, 1), 1);
+  theta = NaN(size(pts, 1), 1);
+  cpf_from = @(x, y, z) cpSphereCap(x, y, z, R, cen_from, side_from);
 
-  minProbeDistance = sqrt(eps)*max(1, R);
-  for k = 1:size(points, 1)
-    [Rk{k}, ~, angleInfo] = angle3D(points(k,1), points(k,2), points(k,3), cpfFrom, ...
-                                    singularPoints(k,:), tau(k,:), targetDirection(k,:));
-    theta(k) = angleInfo.theta;
+  min_probedist = sqrt(eps)*max(1, R);
+  for k = 1:size(pts, 1)
+    [Rk{k}, ~, info] = angle3D(pts(k,1), pts(k,2), pts(k,3), cpf_from, ...
+                               singpts(k,:), tau(k,:), targetdir(k,:));
+    theta(k) = info.theta;
 
+    % a degenerate cp - cpbar at this row: probe again from a point pushed
+    % off along the estimated conormal instead
     if (any(~isfinite(Rk{k}(:))))
-      probeDistance = max(norm(points(k,:) - singularPoints(k,:)), minProbeDistance);
-      probePoint = singularPoints(k,:) + probeDistance*etaFromProbe(k,:);
-      [Rk{k}, ~, angleInfo] = angle3D(probePoint(1), probePoint(2), probePoint(3), cpfFrom, ...
-                                      singularPoints(k,:), tau(k,:), targetDirection(k,:));
-      theta(k) = angleInfo.theta;
+      probedist = max(norm(pts(k,:) - singpts(k,:)), min_probedist);
+      probept = singpts(k,:) + probedist*eta_probe(k,:);
+      [Rk{k}, ~, info] = angle3D(probept(1), probept(2), probept(3), cpf_from, ...
+                                 singpts(k,:), tau(k,:), targetdir(k,:));
+      theta(k) = info.theta;
     end
   end
 
-  allFinite = true;
-  for k = 1:size(points, 1)
+  allfinite = true;
+  for k = 1:size(pts, 1)
     if (any(~isfinite(Rk{k}(:))))
-      allFinite = false;
+      allfinite = false;
       break;
     end
   end
-  if (~allFinite)
+  if (~allfinite)
     error('angle3D did not return finite branch rotation matrices.');
   end
 
-  rotatedPoints = zeros(size(points));
-  for k = 1:size(points, 1)
-    v = (points(k,:) - singularPoints(k,:)).';
-    rotatedPoints(k,:) = singularPoints(k,:) + (Rk{k} * v).';
+  rotpts = zeros(size(pts));
+  for k = 1:size(pts, 1)
+    v = (pts(k,:) - singpts(k,:)).';
+    rotpts(k,:) = singpts(k,:) + (Rk{k} * v).';
   end
+end
 
 
-function eta = capConormal(normal, side)
+function eta = cap_conormal(normal, side)
+%CAP_CONORMAL  the outward conormal of a cap at its rim
 
-  capOut = [-side*ones(size(normal,1),1) zeros(size(normal,1),1) zeros(size(normal,1),1)];
-  eta = capOut - bsxfun(@times, dotRows(capOut, normal), normal);
-  eta = normalizeRows(eta);
-
-
-function u = exactMmsBranch(x, y, z, branch, cen, a, R, beta)
-
-  [s, ~, k] = unfoldedMeridionalCoordinate(x, branch, cen, a, R);
-  u = mmsMeridionalProfile(s, k, beta);
+  capout = [-side*ones(size(normal,1),1) zeros(size(normal,1),1) ...
+            zeros(size(normal,1),1)];
+  eta = capout - bsxfun(@times, dot_rows(capout, normal), normal);
+  eta = normalize_rows(eta);
+end
 
 
-function [u, Us, Uss] = mmsMeridionalProfile(s, k, beta)
-% Smooth meridional profile in arc length s.  The odd mode sin(k s) is the
-% original antisymmetric manufactured solution; the even mode beta*cos(2 k s)
-% breaks the branch symmetry (and the symmetry of |u|) while keeping the
-% Neumann conditions u_s = 0 at both poles s = +/- L = +/- pi/(2k).
+function u = mms_exact(x, y, z, branch, cen, a, R, beta)
+%MMS_EXACT  the manufactured solution at a point of one branch
+
+  [s, ~, k] = mms_coord(x, branch, cen, a, R);
+  u = mms_profile(s, k, beta);
+end
+
+
+function [u, Us, Uss] = mms_profile(s, k, beta)
+%MMS_PROFILE  smooth meridional profile in arc length s
+%   The odd mode sin(k s) is the original antisymmetric manufactured
+%   solution; the even mode beta*cos(2 k s) breaks the branch symmetry (and
+%   the symmetry of |u|) while keeping the Neumann conditions u_s = 0 at
+%   both poles s = +/- L = +/- pi/(2k).
 
   u = sin(k*s) + beta*cos(2*k*s);
   Us = k*cos(k*s) - 2*k*beta*sin(2*k*s);
   Uss = -k^2*sin(k*s) - 4*k^2*beta*cos(2*k*s);
+end
 
 
-function f = rhsMmsBranch(x, y, z, branch, cen, a, R, beta)
+function f = mms_rhs(x, y, z, branch, cen, a, R, beta)
+%MMS_RHS  the right-hand side f = u - lap_S u of the manufactured problem
 
-  [s, theta, k] = unfoldedMeridionalCoordinate(x, branch, cen, a, R);
+  [s, theta, k] = mms_coord(x, branch, cen, a, R);
 
-  [u, Us, Uss] = mmsMeridionalProfile(s, k, beta);
+  [u, Us, Uss] = mms_profile(s, k, beta);
 
-  sinTheta = sin(theta);
-  regularRows = (abs(sinTheta) > sqrt(eps));
-  cotTerm = zeros(size(theta));
-  cotTerm(regularRows) = (cos(theta(regularRows)) ./ sinTheta(regularRows)) .* ...
-                         Us(regularRows) / R;
-  cotTerm(~regularRows) = Uss(~regularRows);
+  sintheta = sin(theta);
+  regrows = (abs(sintheta) > sqrt(eps));
+  cotterm = zeros(size(theta));
+  cotterm(regrows) = (cos(theta(regrows)) ./ sintheta(regrows)) .* ...
+                     Us(regrows) / R;
+  % at a pole the cot term has the removable limit U_ss
+  cotterm(~regrows) = Uss(~regrows);
 
-  laplacianExact = Uss + cotTerm;
-  f = u - laplacianExact;
+  lapexact = Uss + cotterm;
+  f = u - lapexact;
+end
 
 
-function [s, theta, k] = unfoldedMeridionalCoordinate(x, branch, cen, a, R)
+function [s, theta, k] = mms_coord(x, branch, cen, a, R)
+%MMS_COORD  unfolded meridional arc length, polar angle and wavenumber
 
   theta0 = acos(a/R);
   L = R*theta0;
@@ -599,57 +675,63 @@ function [s, theta, k] = unfoldedMeridionalCoordinate(x, branch, cen, a, R)
   else
     error('Unknown MMS branch "%s".', branch);
   end
+end
 
 
-function [maxDiff, maxExactError] = singularCircleDiagnostic(x1d, y1d, z1d, ...
-                                                            ibandA, ibandB, ...
-                                                            uA, uB, p, ...
-                                                            circleRadius, h, ...
-                                                            cenA, a, R, beta)
+function [maxdiff, max_exact_err] = singular_circle_diag(x1d, y1d, z1d, ...
+                                                         ibandA, ibandB, ...
+                                                         uA, uB, p, ...
+                                                         circrad, h, ...
+                                                         cenA, a, R, beta)
+%SINGULAR_CIRCLE_DIAG  how far apart the two branches are on the shared
+%   circle, and how far their average is from the exact solution there
 
-  ntheta = max(32, ceil(2*pi*circleRadius/(2*h)));
+  ntheta = max(32, ceil(2*pi*circrad/(2*h)));
   th = linspace(0, 2*pi, ntheta+1).';
   th(end) = [];
   sx = zeros(size(th));
-  sy = circleRadius*cos(th);
-  sz = circleRadius*sin(th);
+  sy = circrad*cos(th);
+  sz = circrad*sin(th);
 
   EsingA = interp3_matrix(x1d, y1d, z1d, sx, sy, sz, p, ibandA);
   EsingB = interp3_matrix(x1d, y1d, z1d, sx, sy, sz, p, ibandB);
 
   valsA = EsingA*uA;
   valsB = EsingB*uB;
-  exact = exactMmsBranch(sx, sy, sz, 'A', cenA, a, R, beta);
+  exact = mms_exact(sx, sy, sz, 'A', cenA, a, R, beta);
 
   if (any(~isfinite([valsA; valsB; exact])))
     error('Non-finite singular-circle diagnostic values encountered.');
   end
 
-  maxDiff = max(abs(valsA - valsB));
-  maxExactError = max(abs(0.5*(valsA + valsB) - exact));
+  maxdiff = max(abs(valsA - valsB));
+  max_exact_err = max(abs(0.5*(valsA + valsB) - exact));
+end
 
 
-function [errorLinf, errorL2, surfaceWeight, numEval] = surfaceCapError( ...
+function [err_inf, err_l2, swt, neval] = surface_error( ...
       x1d, y1d, z1d, iband, u, p, branch, cen, a, R, h, beta)
+%SURFACE_ERROR  the error on the cap itself, by midpoint quadrature in
+%   (theta, phi)
 
   theta0 = acos(a/R);
   if (strcmp(branch, 'A'))
-    thetaMin = 0;
-    thetaMax = theta0;
+    thmin = 0;
+    thmax = theta0;
   elseif (strcmp(branch, 'B'))
-    thetaMin = pi - theta0;
-    thetaMax = pi;
+    thmin = pi - theta0;
+    thmax = pi;
   else
     error('Unknown MMS branch "%s".', branch);
   end
 
-  circleRadius = sqrt(R^2 - a^2);
+  circrad = sqrt(R^2 - a^2);
   ntheta = max(16, ceil(theta0*R/h*2));
-  nphi = max(32, ceil(2*pi*circleRadius/h*2));
-  dtheta = (thetaMax - thetaMin) / ntheta;
+  nphi = max(32, ceil(2*pi*circrad/h*2));
+  dtheta = (thmax - thmin) / ntheta;
   dphi = 2*pi / nphi;
 
-  theta = thetaMin + ((0:ntheta-1).' + 0.5)*dtheta;
+  theta = thmin + ((0:ntheta-1).' + 0.5)*dtheta;
   phi = ((0:nphi-1).' + 0.5)*dphi;
   [Theta, Phi] = ndgrid(theta, phi);
 
@@ -660,24 +742,25 @@ function [errorLinf, errorL2, surfaceWeight, numEval] = surfaceCapError( ...
 
   Eeval = interp3_matrix(x1d, y1d, z1d, sx, sy, sz, p, iband);
   vals = Eeval*u;
-  exact = exactMmsBranch(sx, sy, sz, branch, cen, a, R, beta);
+  exact = mms_exact(sx, sy, sz, branch, cen, a, R, beta);
   err = vals - exact;
 
   if (any(~isfinite([vals; exact; err; weights])) || any(weights < 0))
     error('Non-finite or negative surface quadrature values encountered.');
   end
 
-  surfaceWeight = sum(weights);
-  if (~isfinite(surfaceWeight) || surfaceWeight <= 0)
+  swt = sum(weights);
+  if (~isfinite(swt) || swt <= 0)
     error('Invalid surface quadrature weight encountered.');
   end
 
-  errorLinf = norm(err, inf);
-  errorL2 = sqrt(sum(weights.*(err.^2)) / surfaceWeight);
-  numEval = length(err);
+  err_inf = norm(err, inf);
+  err_l2 = sqrt(sum(weights.*(err.^2)) / swt);
+  neval = length(err);
+end
 
 
-function rates = convergenceRates(h, err)
+function rates = conv_rates(h, err)
 
   if (length(h) < 2)
     rates = [];
@@ -685,62 +768,66 @@ function rates = convergenceRates(h, err)
   end
 
   rates = log(err(1:end-1) ./ err(2:end)) ./ log(h(1:end-1) ./ h(2:end));
+end
 
 
-function printConvergenceTable(results)
+function printconv(results)
 
-  printOneConvergenceTable('with rotation', results.h, ...
-                           results.errorsLinf, results.ratesLinf, ...
-                           results.errorsL2, results.ratesL2);
-  printOneConvergenceTable('without rotation', results.noRotation.h, ...
-                           results.noRotation.errorsLinf, results.noRotation.ratesLinf, ...
-                           results.noRotation.errorsL2, results.noRotation.ratesL2);
+  printconv_one('with rotation', results.h, ...
+                results.errs_inf, results.rates_inf, ...
+                results.errs_l2, results.rates_l2);
+  printconv_one('without rotation', results.norot.h, ...
+                results.norot.errs_inf, results.norot.rates_inf, ...
+                results.norot.errs_l2, results.norot.rates_l2);
+end
 
 
-function printOneConvergenceTable(label, h, errorsLinf, ratesLinf, errorsL2, ratesL2)
+function printconv_one(label, h, errs_inf, rates_inf, errs_l2, rates_l2)
 
   fprintf('\nConvergence summary (%s)\n', label);
   fprintf('       h    surface Linf      rate     surface L2       rate\n');
   for k = 1:length(h)
     if (k == 1)
       fprintf('%8.4g  %14.6e      --   %14.6e      --\n', ...
-              h(k), errorsLinf(k), errorsL2(k));
+              h(k), errs_inf(k), errs_l2(k));
     else
       fprintf('%8.4g  %14.6e  %6.3f   %14.6e  %6.3f\n', ...
-              h(k), errorsLinf(k), ratesLinf(k-1), ...
-              errorsL2(k), ratesL2(k-1));
+              h(k), errs_inf(k), rates_inf(k-1), ...
+              errs_l2(k), rates_l2(k-1));
     end
   end
+end
 
 
-function plotConvergenceSummary(results)
+function plotconv(results)
+%PLOTCONV  the surface error against N = 1/h, with and without the rotation
 
-  [N, orderIdx] = sort(results.N);
-  linfErr = results.errorsLinf(orderIdx);
-  l2Err = results.errorsL2(orderIdx);
-  linfErrNoRot = results.noRotation.errorsLinf(orderIdx);
-  l2ErrNoRot = results.noRotation.errorsL2(orderIdx);
+  [N, ord] = sort(results.N);
+  err_inf = results.errs_inf(ord);
+  err_l2 = results.errs_l2(ord);
+  err_inf_norot = results.norot.errs_inf(ord);
+  err_l2_norot = results.norot.errs_l2(ord);
 
-  finiteRows = isfinite(N) & isfinite(linfErr) & isfinite(l2Err) & ...
-               isfinite(linfErrNoRot) & isfinite(l2ErrNoRot) & ...
-               (N > 0) & (linfErr > 0) & (l2Err > 0) & ...
-               (linfErrNoRot > 0) & (l2ErrNoRot > 0);
-  N = N(finiteRows);
-  linfErr = linfErr(finiteRows);
-  l2Err = l2Err(finiteRows);
-  linfErrNoRot = linfErrNoRot(finiteRows);
-  l2ErrNoRot = l2ErrNoRot(finiteRows);
+  ok = isfinite(N) & isfinite(err_inf) & isfinite(err_l2) & ...
+       isfinite(err_inf_norot) & isfinite(err_l2_norot) & ...
+       (N > 0) & (err_inf > 0) & (err_l2 > 0) & ...
+       (err_inf_norot > 0) & (err_l2_norot > 0);
+  N = N(ok);
+  err_inf = err_inf(ok);
+  err_l2 = err_l2(ok);
+  err_inf_norot = err_inf_norot(ok);
+  err_l2_norot = err_l2_norot(ok);
 
   if (isempty(N))
     return;
   end
 
-  ref2 = l2Err(1)*(N/N(1)).^(-2);
-  ref1 = l2ErrNoRot(1)*(N/N(1)).^(-1);
+  ref2 = err_l2(1)*(N/N(1)).^(-2);
+  ref1 = err_l2_norot(1)*(N/N(1)).^(-1);
 
   figure(2); clf;
-  loglog(N, linfErr, 'o-', N, l2Err, 's-', ...
-         N, linfErrNoRot, 'o--', N, l2ErrNoRot, 's--', ...
+  loglog(N, err_inf, 'o-', N, err_l2, 's-', ...
+         N, err_inf_norot, 'o--', N, err_l2_norot, 's--', ...
          N, ref2, 'k--', N, ref1, 'k:', 'LineWidth', 1.5);
   xlabel('N = 1/h');
   ylabel('surface error');
@@ -750,10 +837,12 @@ function plotConvergenceSummary(results)
          'O(h^2)', 'O(h)', 'Location', 'southwest');
   grid on;
   drawnow(); pause(0);
+end
 
 
-function plotLensSolution(x1d, y1d, z1d, ibandA, uA, ibandB, uB, ...
-                          p, cenA, cenB, a, R, h)
+function plotlens(x1d, y1d, z1d, ibandA, uA, ibandB, uB, ...
+                  p, cenA, cenB, a, R, h)
+%PLOTLENS  the solution on the two caps
 
   theta0 = acos(a/R);
   ntheta = 64;
@@ -787,76 +876,74 @@ function plotLensSolution(x1d, y1d, z1d, ibandA, uA, ibandB, uB, ...
   axis equal; shading interp;
   colorbar;
   drawnow(); pause(0);
+end
 
 
-function v = normalizeRows(v)
+function v = normalize_rows(v)
 
   n = sqrt(sum(v.^2, 2));
   n(n == 0) = 1;
   v = bsxfun(@rdivide, v, n);
+end
 
 
-function d = dotRows(a, b)
+function d = dot_rows(a, b)
 
   d = sum(a.*b, 2);
+end
 
 
-function value = getOption(opts, name, defaultValue)
-
-  if (isfield(opts, name))
-    value = opts.(name);
-  else
-    value = defaultValue;
-  end
-
-
-function value = minValue(x)
+function value = minval(x)
 
   if (isempty(x))
     value = NaN;
   else
     value = min(x);
   end
+end
 
 
-function value = maxValue(x)
+function value = maxval(x)
 
   if (isempty(x))
     value = NaN;
   else
     value = max(x);
   end
+end
 
 
-function level = emptyLevelResult()
+function lev = empty_level_result()
 
-  level = struct('h', NaN, ...
-                 'errorLinfA', NaN, ...
-                 'errorLinfB', NaN, ...
-                 'errorLinf', NaN, ...
-                 'errorL2A', NaN, ...
-                 'errorL2B', NaN, ...
-                 'errorL2', NaN, ...
-                 'bandErrorLinfA', NaN, ...
-                 'bandErrorLinfB', NaN, ...
-                 'bandErrorLinf', NaN, ...
-                 'bandErrorL2A', NaN, ...
-                 'bandErrorL2B', NaN, ...
-                 'bandErrorL2', NaN, ...
-                 'surfaceEvalPointsA', 0, ...
-                 'surfaceEvalPointsB', 0, ...
-                 'crossRowsA', 0, ...
-                 'crossRowsB', 0, ...
-                 'innerBandA', 0, ...
-                 'innerBandB', 0, ...
-                 'outerBandA', 0, ...
-                 'outerBandB', 0, ...
-                 'maxExtensionRowSumError', NaN, ...
-                 'maxSingularBranchDifference', NaN, ...
-                 'maxSingularExactError', NaN);
+  lev = struct('h', NaN, ...
+               'err_infA', NaN, ...
+               'err_infB', NaN, ...
+               'err_inf', NaN, ...
+               'err_l2A', NaN, ...
+               'err_l2B', NaN, ...
+               'err_l2', NaN, ...
+               'band_err_infA', NaN, ...
+               'band_err_infB', NaN, ...
+               'band_err_inf', NaN, ...
+               'band_err_l2A', NaN, ...
+               'band_err_l2B', NaN, ...
+               'band_err_l2', NaN, ...
+               'nevalA', 0, ...
+               'nevalB', 0, ...
+               'crossrowsA', 0, ...
+               'crossrowsB', 0, ...
+               'innerbandA', 0, ...
+               'innerbandB', 0, ...
+               'outerbandA', 0, ...
+               'outerbandB', 0, ...
+               'max_rowsum_err', NaN, ...
+               'max_singular_diff', NaN, ...
+               'max_singular_exact_err', NaN);
+end
 
 
-function reset_icpm2009bandingchecks(oldValue)
+function reset_icpm2009bandingchecks(oldvalue)
 
   global ICPM2009BANDINGCHECKS
-  ICPM2009BANDINGCHECKS = oldValue;
+  ICPM2009BANDINGCHECKS = oldvalue;
+end

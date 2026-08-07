@@ -45,9 +45,7 @@ b = 0.6;    % semi-axis along y
 % angle.  See the note at the top: the two curves are isometric as
 % 1-manifolds, so the exact solution and f are the same function of
 % arclength in both and the errors are directly comparable.
-if ~exist('flipped', 'var')
-  flipped = true;
-end
+flipped = true;
 if flipped
   geoname = 'flipped';
 else
@@ -61,17 +59,13 @@ end
 % "curve" would be one arc traversed twice, with the two bands on top of
 % each other and no closest point well defined.  Two oblique cuts there
 % instead, one of each curvature.
-if ~exist('ycut_list', 'var')
-  if flipped
-    ycut_list = [0.3 0.1];
-  else
-    ycut_list = [0.5 0.3];
-  end
+if flipped
+  ycut_list = [0.3 0.1];
+else
+  ycut_list = [0.5 0.3];
 end
 
-if ~exist('hvals', 'var')
-  hvals = 0.02*2.^-(0:7);
-end
+hvals = 0.02*2.^-(0:7);
 
 dim = 2;    % dimension
 p = 3;      % interpolation degree

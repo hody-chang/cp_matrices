@@ -1,51 +1,57 @@
-function [R, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis, targetDirection, varargin)
+function [R, conormal, info] = angle3D(x, y, z, cpf, singpt, axis, targetdir, varargin)
 %ANGLE3D  Estimate a 3D branch rotation matrix from cp/cpbar averages.
-%   [R, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis,
-%      targetDirection, ...) computes cp(x), then
-%      cpbar(x) = cp(2*cp(x)-x), using the closest point function handle
-%      cpf.  Points are selected either by closest point proximity to
-%      singularPoint = [sx sy sz], or, when singularPoint is omitted or
-%      empty, by bdy ~= 0 from cpf.  If cpf does not return bdy and no
-%      singularPoint is supplied, all points are candidates.
+%   [R, conormal, info] = angle3D(x, y, z, cpf, singpt, axis, targetdir,
+%      ...) computes cp(x), then cpbar(x) = cp(2*cp(x)-x), using the
+%      closest point function handle cpf.  Points are selected either by
+%      closest point proximity to singpt = [sx sy sz], or, when singpt
+%      is omitted or empty, by bdy ~= 0 from cpf.  If cpf does not return
+%      bdy and no singpt is supplied, all points are candidates.
 %
 %      The vector cp - cpbar is formed at selected points.  Tiny vectors
 %      are discarded, the remaining vectors are normalized, and conormal is
 %      the normalized average direction.  This direction estimates the
 %      branch outward co-normal or -incoming tangent analogue.
 %
-%      When axis and targetDirection are both supplied and non-empty, R is
+%      When axis and targetdir are both supplied and non-empty, R is
 %      the 3x3 rotation matrix (Rodrigues' formula) about axis that maps
-%      conormal to targetDirection (both projected perpendicular to axis).
+%      conormal to targetdir (both projected perpendicular to axis).
 %      The angle theta = atan2(sin,cos) is stored in info.theta.  When
-%      axis or targetDirection is omitted, R is NaN(3).
+%      axis or targetdir is omitted, R is NaN(3).
 %
 %      Extra inputs are forwarded to cpf.
 %
 %   If there are no usable vectors, R is NaN(3), conormal is NaN, and
 %   info.numValid is zero.
+%
+%   Code is vectorized: any size/shape for x should work, provided the
+%   function handle cpf is vectorized as well.
 
   if (nargin < 5)
-    singularPoint = [];
+    singpt = [];
   end
   if (nargin < 6)
     axis = [];
   end
   if (nargin < 7)
-    targetDirection = [];
+    targetdir = [];
   end
 
-  [cpx, cpy, cpz, dist, bdy, hasBdy] = angle3D_callCpf(cpf, x, y, z, varargin{:});
-  [cpbarx, cpbary, cpbarz] = angle3D_callCpf(cpf, 2*cpx - x, 2*cpy - y, 2*cpz - z, varargin{:});
+  [cpx, cpy, cpz, dist, bdy, hasbdy] = ...
+      angle3D_call_cpf(cpf, x, y, z, varargin{:});
+  [cpbarx, cpbary, cpbarz] = ...
+      angle3D_call_cpf(cpf, 2*cpx - x, 2*cpy - y, 2*cpz - z, varargin{:});
 
-  vals = [x(:); y(:); z(:); cpx(:); cpy(:); cpz(:); cpbarx(:); cpbary(:); cpbarz(:)];
-  if (~isempty(singularPoint))
-    vals = [vals; singularPoint(:)];
+  % the tolerances scale with the coordinates the cp function works in
+  vals = [x(:); y(:); z(:); cpx(:); cpy(:); cpz(:); ...
+          cpbarx(:); cpbary(:); cpbarz(:)];
+  if (~isempty(singpt))
+    vals = [vals; singpt(:)];
   end
   if (~isempty(axis))
     vals = [vals; axis(:)];
   end
-  if (~isempty(targetDirection))
-    vals = [vals; targetDirection(:)];
+  if (~isempty(targetdir))
+    vals = [vals; targetdir(:)];
   end
   vals = vals(isfinite(vals));
   if isempty(vals)
@@ -55,132 +61,139 @@ function [R, conormal, info] = angle3D(x, y, z, cpf, singularPoint, axis, target
   end
 
   tol = 100*eps*scale;
-  singularTol = tol;
-  vectorTol = tol;
+  singtol = tol;
+  vectol = tol;
 
-  if isempty(singularPoint)
-    if (hasBdy && ~isempty(bdy))
+  if isempty(singpt)
+    if (hasbdy && ~isempty(bdy))
       mask = (bdy ~= 0);
     else
       mask = true(size(cpx));
     end
   else
-    sx = singularPoint(1);
-    sy = singularPoint(2);
-    sz = singularPoint(3);
-    mask = sqrt((cpx - sx).^2 + (cpy - sy).^2 + (cpz - sz).^2) <= singularTol;
+    sx = singpt(1);
+    sy = singpt(2);
+    sz = singpt(3);
+    mask = sqrt((cpx - sx).^2 + (cpy - sy).^2 + (cpz - sz).^2) <= singtol;
   end
 
   vx = cpx - cpbarx;
   vy = cpy - cpbary;
   vz = cpz - cpbarz;
-  vectorNorms = sqrt(vx.^2 + vy.^2 + vz.^2);
-  validMask = mask & isfinite(vectorNorms) & (vectorNorms > vectorTol);
-  zeroMask = mask & isfinite(vectorNorms) & (vectorNorms <= vectorTol);
+  vnorm = sqrt(vx.^2 + vy.^2 + vz.^2);
+  validmask = mask & isfinite(vnorm) & (vnorm > vectol);
+  zeromask = mask & isfinite(vnorm) & (vnorm <= vectol);
 
-  numCandidates = sum(mask(:));
-  numValid = sum(validMask(:));
-  numZero = sum(zeroMask(:));
+  ncand = sum(mask(:));
+  nvalid = sum(validmask(:));
+  nzero = sum(zeromask(:));
 
   conormal = [NaN NaN NaN];
   R = NaN(3);
   theta = NaN;
-  average = [NaN NaN NaN];
-  averageNorm = NaN;
+  avg = [NaN NaN NaN];
+  avgnorm = NaN;
 
-  if (numValid > 0)
-    ux = vx(validMask) ./ vectorNorms(validMask);
-    uy = vy(validMask) ./ vectorNorms(validMask);
-    uz = vz(validMask) ./ vectorNorms(validMask);
-    average = [mean(ux(:)) mean(uy(:)) mean(uz(:))];
-    averageNorm = norm(average);
+  if (nvalid > 0)
+    ux = vx(validmask) ./ vnorm(validmask);
+    uy = vy(validmask) ./ vnorm(validmask);
+    uz = vz(validmask) ./ vnorm(validmask);
+    avg = [mean(ux(:)) mean(uy(:)) mean(uz(:))];
+    avgnorm = norm(avg);
 
-    if (averageNorm > vectorTol)
-      conormal = average ./ averageNorm;
+    if (avgnorm > vectol)
+      conormal = avg ./ avgnorm;
     end
   end
 
-  angleSource = [NaN NaN NaN];
-  angleTarget = [NaN NaN NaN];
-  axisUnit = [NaN NaN NaN];
-  if (~isempty(axis) && ~isempty(targetDirection) && all(isfinite(conormal)))
-    axisVec = axis(:).';
-    targetVec = targetDirection(:).';
-    axisNorm = norm(axisVec);
-    targetNorm = norm(targetVec);
+  %% Rodrigues rotation about axis, taking conormal onto targetdir
 
-    if (length(axisVec) == 3 && length(targetVec) == 3 && ...
-        isfinite(axisNorm) && isfinite(targetNorm) && ...
-        axisNorm > vectorTol && targetNorm > vectorTol)
-      axisUnit = axisVec ./ axisNorm;
-      angleSource = conormal - dot(conormal, axisUnit)*axisUnit;
-      angleTarget = targetVec - dot(targetVec, axisUnit)*axisUnit;
-      sourceNorm = norm(angleSource);
-      targetProjectedNorm = norm(angleTarget);
+  angsrc = [NaN NaN NaN];
+  angtgt = [NaN NaN NaN];
+  axisunit = [NaN NaN NaN];
+  if (~isempty(axis) && ~isempty(targetdir) && all(isfinite(conormal)))
+    axisvec = axis(:).';
+    targetvec = targetdir(:).';
+    axisnorm = norm(axisvec);
+    targetnorm = norm(targetvec);
 
-      if (sourceNorm > vectorTol && targetProjectedNorm > vectorTol)
-        angleSource = angleSource ./ sourceNorm;
-        angleTarget = angleTarget ./ targetProjectedNorm;
-        cosTheta = dot(angleSource, angleTarget);
-        sinTheta = dot(axisUnit, cross(angleSource, angleTarget));
-        K = [0 -axisUnit(3) axisUnit(2); ...
-             axisUnit(3) 0 -axisUnit(1); ...
-             -axisUnit(2) axisUnit(1) 0];
-        R = eye(3) + sinTheta*K + (1 - cosTheta)*(K*K);
-        theta = atan2(sinTheta, cosTheta);
+    if (length(axisvec) == 3 && length(targetvec) == 3 && ...
+        isfinite(axisnorm) && isfinite(targetnorm) && ...
+        axisnorm > vectol && targetnorm > vectol)
+      axisunit = axisvec ./ axisnorm;
+      % both directions projected perpendicular to the axis
+      angsrc = conormal - dot(conormal, axisunit)*axisunit;
+      angtgt = targetvec - dot(targetvec, axisunit)*axisunit;
+      srcnorm = norm(angsrc);
+      tgtnorm = norm(angtgt);
+
+      if (srcnorm > vectol && tgtnorm > vectol)
+        angsrc = angsrc ./ srcnorm;
+        angtgt = angtgt ./ tgtnorm;
+        costh = dot(angsrc, angtgt);
+        sinth = dot(axisunit, cross(angsrc, angtgt));
+        K = [0 -axisunit(3) axisunit(2); ...
+             axisunit(3) 0 -axisunit(1); ...
+             -axisunit(2) axisunit(1) 0];
+        R = eye(3) + sinth*K + (1 - costh)*(K*K);
+        theta = atan2(sinth, costh);
       end
     end
   end
 
+  % NB: the info field names below are the output interface of this
+  % function; the tests in surfaces/tests depend on them.
   info.theta = theta;
-  info.numCandidates = numCandidates;
-  info.numValid = numValid;
-  info.numZero = numZero;
+  info.numCandidates = ncand;
+  info.numValid = nvalid;
+  info.numZero = nzero;
   info.cpx = cpx;
   info.cpy = cpy;
   info.cpz = cpz;
   info.dist = dist;
   info.bdy = bdy;
-  info.hasBdy = hasBdy;
+  info.hasBdy = hasbdy;
   info.cpbarx = cpbarx;
   info.cpbary = cpbary;
   info.cpbarz = cpbarz;
   info.mask = mask;
-  info.validMask = validMask;
-  info.zeroMask = zeroMask;
+  info.validMask = validmask;
+  info.zeroMask = zeromask;
   info.vectors = [vx(:) vy(:) vz(:)];
-  info.vectorNorms = vectorNorms;
-  info.average = average;
-  info.averageNorm = averageNorm;
+  info.vectorNorms = vnorm;
+  info.average = avg;
+  info.averageNorm = avgnorm;
   info.tol = tol;
-  info.singularTol = singularTol;
-  info.vectorTol = vectorTol;
+  info.singularTol = singtol;
+  info.vectorTol = vectol;
   if (~isempty(axis))
     info.axis = axis;
   end
-  if (~isempty(targetDirection))
-    info.targetDirection = targetDirection;
+  if (~isempty(targetdir))
+    info.targetDirection = targetdir;
   end
-  if (~isempty(axis) && ~isempty(targetDirection))
-    info.axisUnit = axisUnit;
-    info.angleSource = angleSource;
-    info.angleTarget = angleTarget;
+  if (~isempty(axis) && ~isempty(targetdir))
+    info.axisUnit = axisunit;
+    info.angleSource = angsrc;
+    info.angleTarget = angtgt;
   end
 
 
-function [cpx, cpy, cpz, dist, bdy, hasBdy] = angle3D_callCpf(cpf, x, y, z, varargin)
+function [cpx, cpy, cpz, dist, bdy, hasbdy] = ...
+    angle3D_call_cpf(cpf, x, y, z, varargin)
+%ANGLE3D_CALL_CPF  call cpf, tolerating one that does not return bdy
 
   try
     [cpx, cpy, cpz, dist, bdy] = cpf(x, y, z, varargin{:});
-    hasBdy = true;
+    hasbdy = true;
   catch ME
-    tooManyOutputs = strcmp(ME.identifier, 'MATLAB:TooManyOutputs') || ...
+    toomany = strcmp(ME.identifier, 'MATLAB:TooManyOutputs') || ...
       ~isempty(strfind(ME.message, 'Too many output'));
-    if ~tooManyOutputs
+    if ~toomany
       rethrow(ME);
     end
 
     [cpx, cpy, cpz, dist] = cpf(x, y, z, varargin{:});
     bdy = [];
-    hasBdy = false;
+    hasbdy = false;
   end
