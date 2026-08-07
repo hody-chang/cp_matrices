@@ -20,7 +20,7 @@ global ICPM2009BANDINGCHECKS
 % this is a bit dangerous: will break other less tightly banded
 % codes, turn it off later
 ICPM2009BANDINGCHECKS = 1;
-cleanupICPM2009BANDINGCHECKS = onCleanup(@() reset_icpm2009bandingchecks());
+cleanup_bandingchecks = onCleanup(@() reset_icpm2009bandingchecks());
 
 
 %%
@@ -90,11 +90,11 @@ LA = LtempA(:, outerbandtempA);
 EAA = EtempA(outerbandtempA, innerbandA);
 clear LtempA EtempA outerbandtempA
 
-innerInOuterA = zeros(size(innerbandA));
+inner_in_outerA = zeros(size(innerbandA));
 RA = sparse([],[],[],length(innerbandA),length(outerbandA),length(innerbandA));
 for i=1:length(innerbandA)
   I = find(outerbandA == innerbandA(i));
-  innerInOuterA(i) = I;
+  inner_in_outerA(i) = I;
   RA(i,I) = 1;
 end
 
@@ -127,11 +127,11 @@ LB = LtempB(:, outerbandtempB);
 EBB = EtempB(outerbandtempB, innerbandB);
 clear LtempB EtempB outerbandtempB
 
-innerInOuterB = zeros(size(innerbandB));
+inner_in_outerB = zeros(size(innerbandB));
 RB = sparse([],[],[],length(innerbandB),length(outerbandB),length(innerbandB));
 for i=1:length(innerbandB)
   I = find(outerbandB == innerbandB(i));
-  innerInOuterB(i) = I;
+  inner_in_outerB(i) = I;
   RB(i,I) = 1;
 end
 
@@ -165,53 +165,53 @@ endpointA1 = cen + RADIUS*[cos(angleA1) sin(angleA1)];
 endpointA2 = cen + RADIUS*[cos(angleA2) sin(angleA2)];
 endpointB1 = cen + RADIUS*[cos(angleB1) sin(angleB1)];
 endpointB2 = cen + RADIUS*[cos(angleB2) sin(angleB2)];
-endpointTol = 100*eps(max(1,RADIUS));
+endpttol = 100*eps(max(1,RADIUS));
 
 % cpArc labels off-arc closest points with bdy=1 or bdy=2, but exact
 % endpoint-angle points can still have bdy=0.  Keep this local endpoint id
 % for routing and theta lookup.
-endpointIdA = bdygoutA;
-endpointIdA(hypot(cpxgoutA - endpointA1(1), cpygoutA - endpointA1(2)) <= endpointTol) = 1;
-endpointIdA(hypot(cpxgoutA - endpointA2(1), cpygoutA - endpointA2(2)) <= endpointTol) = 2;
+endptidA = bdygoutA;
+endptidA(hypot(cpxgoutA - endpointA1(1), cpygoutA - endpointA1(2)) <= endpttol) = 1;
+endptidA(hypot(cpxgoutA - endpointA2(1), cpygoutA - endpointA2(2)) <= endpttol) = 2;
 
-endpointIdB = bdygoutB;
-endpointIdB(hypot(cpxgoutB - endpointB1(1), cpygoutB - endpointB1(2)) <= endpointTol) = 1;
-endpointIdB(hypot(cpxgoutB - endpointB2(1), cpygoutB - endpointB2(2)) <= endpointTol) = 2;
+endptidB = bdygoutB;
+endptidB(hypot(cpxgoutB - endpointB1(1), cpygoutB - endpointB1(2)) <= endpttol) = 1;
+endptidB(hypot(cpxgoutB - endpointB2(1), cpygoutB - endpointB2(2)) <= endpttol) = 2;
 
-crossRowsA = find(endpointIdA ~= 0);
-crossRowsB = find(endpointIdB ~= 0);
+crossrowsA = find(endptidA ~= 0);
+crossrowsB = find(endptidB ~= 0);
 
 EAB = sparse(length(outerbandA), length(innerbandB));
 EBA = sparse(length(outerbandB), length(innerbandA));
 
-if (~isempty(crossRowsA))
-  th = thetaAtoB(endpointIdA(crossRowsA));
-  x0 = cpxgoutA(crossRowsA);  y0 = cpygoutA(crossRowsA);
-  dx0 = xgoutA(crossRowsA) - x0;
-  dy0 = ygoutA(crossRowsA) - y0;
+if (~isempty(crossrowsA))
+  th = thetaAtoB(endptidA(crossrowsA));
+  x0 = cpxgoutA(crossrowsA);  y0 = cpygoutA(crossrowsA);
+  dx0 = xgoutA(crossrowsA) - x0;
+  dy0 = ygoutA(crossrowsA) - y0;
   xr = x0 + cos(th).*dx0 - sin(th).*dy0;
   yr = y0 + sin(th).*dx0 + cos(th).*dy0;
   [cpxAtoB, cpyAtoB] = cpArc(xr, yr, RADIUS, cen, angleB1, angleB2);
-  EAB(crossRowsA,:) = interp2_matrix(x1d, y1d, cpxAtoB, cpyAtoB, p, innerbandB);
-  EAA(crossRowsA,:) = 0;
+  EAB(crossrowsA,:) = interp2_matrix(x1d, y1d, cpxAtoB, cpyAtoB, p, innerbandB);
+  EAA(crossrowsA,:) = 0;
 end
 
-if (~isempty(crossRowsB))
-  th = thetaBtoA(endpointIdB(crossRowsB));
-  x0 = cpxgoutB(crossRowsB);  y0 = cpygoutB(crossRowsB);
-  dx0 = xgoutB(crossRowsB) - x0;
-  dy0 = ygoutB(crossRowsB) - y0;
+if (~isempty(crossrowsB))
+  th = thetaBtoA(endptidB(crossrowsB));
+  x0 = cpxgoutB(crossrowsB);  y0 = cpygoutB(crossrowsB);
+  dx0 = xgoutB(crossrowsB) - x0;
+  dy0 = ygoutB(crossrowsB) - y0;
   xr = x0 + cos(th).*dx0 - sin(th).*dy0;
   yr = y0 + sin(th).*dx0 + cos(th).*dy0;
   [cpxBtoA, cpyBtoA] = cpArc(xr, yr, RADIUS, cen, angleA1, angleA2);
-  EBA(crossRowsB,:) = interp2_matrix(x1d, y1d, cpxBtoA, cpyBtoA, p, innerbandA);
-  EBB(crossRowsB,:) = 0;
+  EBA(crossrowsB,:) = interp2_matrix(x1d, y1d, cpxBtoA, cpyBtoA, p, innerbandA);
+  EBB(crossrowsB,:) = 0;
 end
 
 fprintf('Cross-branch extension rows A->B: %d of %d\n', ...
-        length(crossRowsA), length(outerbandA));
+        length(crossrowsA), length(outerbandA));
 fprintf('Cross-branch extension rows B->A: %d of %d\n', ...
-        length(crossRowsB), length(outerbandB));
+        length(crossrowsB), length(outerbandB));
 fprintf('Endpoint rotation angles A->B: [%g %g]\n', thetaAtoB(1), thetaAtoB(2));
 fprintf('Endpoint rotation angles B->A: [%g %g]\n', thetaBtoA(1), thetaBtoA(2));
 
@@ -260,33 +260,33 @@ sy = [endpointA1(2); endpointA2(2)];
 EvertexA = interp2_matrix(x1d, y1d, sx, sy, p, innerbandA);
 EvertexB = interp2_matrix(x1d, y1d, sx, sy, p, innerbandB);
 
-endpointNodeTol = dx*1e-8;
-xInnerA = xx(innerbandA);  yInnerA = yy(innerbandA);
-xInnerB = xx(innerbandB);  yInnerB = yy(innerbandB);
-vertexWriteIdxA = zeros(length(sx),1);
-vertexWriteIdxB = zeros(length(sx),1);
-vertexWriteExactA = true(length(sx),1);
-vertexWriteExactB = true(length(sx),1);
+endpt_nodetol = dx*1e-8;
+xinnerA = xx(innerbandA);  yinnerA = yy(innerbandA);
+xinnerB = xx(innerbandB);  yinnerB = yy(innerbandB);
+vertex_writeidxA = zeros(length(sx),1);
+vertex_writeidxB = zeros(length(sx),1);
+vertex_write_exactA = true(length(sx),1);
+vertex_write_exactB = true(length(sx),1);
 
 for k = 1:length(sx)
-  I = find((abs(xInnerA - sx(k)) <= endpointNodeTol) & ...
-           (abs(yInnerA - sy(k)) <= endpointNodeTol));
+  I = find((abs(xinnerA - sx(k)) <= endpt_nodetol) & ...
+           (abs(yinnerA - sy(k)) <= endpt_nodetol));
   if (isempty(I))
-    [dummy, I] = min(hypot(xInnerA - sx(k), yInnerA - sy(k)));
-    vertexWriteExactA(k) = false;
+    [~, I] = min(hypot(xinnerA - sx(k), yinnerA - sy(k)));
+    vertex_write_exactA(k) = false;
   end
-  vertexWriteIdxA(k) = I(1);
+  vertex_writeidxA(k) = I(1);
 
-  I = find((abs(xInnerB - sx(k)) <= endpointNodeTol) & ...
-           (abs(yInnerB - sy(k)) <= endpointNodeTol));
+  I = find((abs(xinnerB - sx(k)) <= endpt_nodetol) & ...
+           (abs(yinnerB - sy(k)) <= endpt_nodetol));
   if (isempty(I))
-    [dummy, I] = min(hypot(xInnerB - sx(k), yInnerB - sy(k)));
-    vertexWriteExactB(k) = false;
+    [~, I] = min(hypot(xinnerB - sx(k), yinnerB - sy(k)));
+    vertex_write_exactB(k) = false;
   end
-  vertexWriteIdxB(k) = I(1);
+  vertex_writeidxB(k) = I(1);
 end
 
-if (any(~vertexWriteExactA) || any(~vertexWriteExactB))
+if (any(~vertex_write_exactA) || any(~vertex_write_exactB))
   fprintf('Vertex averaging fallback used: nearest innerband DOF for missing endpoint node.\n');
 end
 
@@ -306,11 +306,11 @@ for kt = 1:numtimesteps
   uA = u(1:length(innerbandA));
   uB = u(length(innerbandA)+1:end);
 
-  vertexValuesA = EvertexA*uA;
-  vertexValuesB = EvertexB*uB;
-  vertexAvgValues = 0.5*(vertexValuesA + vertexValuesB);
-  uA(vertexWriteIdxA) = vertexAvgValues;
-  uB(vertexWriteIdxB) = vertexAvgValues;
+  vertex_valsA = EvertexA*uA;
+  vertex_valsB = EvertexB*uB;
+  vertex_avg = 0.5*(vertex_valsA + vertex_valsB);
+  uA(vertex_writeidxA) = vertex_avg;
+  uB(vertex_writeidxB) = vertex_avg;
   u = [uA; uB];
 
   t = kt*dt;
@@ -334,13 +334,13 @@ for kt = 1:numtimesteps
     hA = plot(thplotA, arcplotA, 'b-');
     hold on;
     hB = plot(thplotB, arcplotB, 'c-');
-    hExact = plot(thplotA, uexactfn(t,thplotA), 'r--');
+    hexact = plot(thplotA, uexactfn(t,thplotA), 'r--');
     plot(thplotB, uexactfn(t,thplotB), 'r--');
-    hInitial = plot(thplotA, arcplot0A, 'g-.');
+    hinit = plot(thplotA, arcplot0A, 'g-.');
     plot(thplotB, arcplot0B, 'g-.');
     title( ['soln at time ' num2str(t) ', on circle branches'] );
     xlabel('theta'); ylabel('u');
-    legend([hA hB hExact hInitial], ...
+    legend([hA hB hexact hinit], ...
            'branch A iCPM', 'branch B iCPM', 'exact answer', ...
            'initial condition ', 'Location', 'SouthEast');
 
@@ -357,14 +357,14 @@ arcplotB = EplotB*uB;
 
 errorA = max(abs(uexactfn(t,thplotA) - arcplotA));
 errorB = max(abs(uexactfn(t,thplotB) - arcplotB));
-vertexValuesA = EvertexA*uA;
-vertexValuesB = EvertexB*uB;
-vertexDiffFinal = abs(vertexValuesA - vertexValuesB);
+vertex_valsA = EvertexA*uA;
+vertex_valsB = EvertexB*uB;
+vertex_diff_final = abs(vertex_valsA - vertex_valsB);
 
 fprintf('Max error on branch A at t=%g: %g\n', t, errorA);
 fprintf('Max error on branch B at t=%g: %g\n', t, errorB);
 fprintf('Final branch vertex differences [top bottom]: [%g %g]\n', ...
-        vertexDiffFinal(1), vertexDiffFinal(2));
+        vertex_diff_final(1), vertex_diff_final(2));
 
 
 function reset_icpm2009bandingchecks()

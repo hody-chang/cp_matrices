@@ -81,12 +81,9 @@
 %
 % Run headlessly, from this directory:
 %   matlab -batch "example_ellipse_cut_tangent_schemes"
-% for the ellipse, and
-%   matlab -batch "flipped = true; example_ellipse_cut_tangent_schemes"
-% for the corner.  Figures are named for the geometry, so the two do not
-% overwrite each other.  Set hvals or ycut_list beforehand to override
-% the defaults, e.g.
-%   matlab -batch "hvals = 0.02*2.^-(0:3); example_ellipse_cut_tangent_schemes"
+% Set the "flipped" flag below to false for the ellipse and true for the
+% corner.  Figures are named for the geometry, so the two do not overwrite
+% each other.  The cut heights and grid sizes are edited below as well.
 
 % adjust as appropriate
 addpath('../cp_matrices');
@@ -119,9 +116,7 @@ b = 0.6;    % semi-axis along y
 % of the point's pre-image: u(t), f(t) and the exact Laplace-Beltrami
 % carry over unchanged, and the two runs solve the identical intrinsic
 % problem.  Only the embedding, and so the closest point map, differs.
-if ~exist('flipped', 'var')
-  flipped = false;
-end
+flipped = true;
 if flipped
   geoname = 'flipped';
 else
@@ -134,20 +129,16 @@ end
 % of an ellipse across its own centre line lays it exactly on the upper
 % half, and the "curve" would be one arc traversed twice, with the two
 % bands on top of each other and no closest point well defined.
-if ~exist('ycut_list', 'var')
-  if flipped
-    ycut_list = [0.4 0.3 0.2 0.1];
-  else
-    ycut_list = [0.5 0.4 0.3 0.2 0.1];
-  end
+if flipped
+  ycut_list = [0.4 0.3 0.2 0.1];
+else
+  ycut_list = [0.5 0.4 0.3 0.2 0.1];
 end
 
 % Grid sizes.  The coarse end is where the rotation error stands out above
 % the baseline; the fine end is where the baseline turns back up, the
 % elliptic solve having run out of precision before it runs out of dx^2.
-if ~exist('hvals', 'var')
-  hvals = 0.02*2.^-(0:7);
-end
+hvals = 0.02*2.^-(0:7);
 
 dim = 2;    % dimension
 p = 3;      % interpolation degree

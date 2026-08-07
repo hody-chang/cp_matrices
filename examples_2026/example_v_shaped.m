@@ -5,101 +5,121 @@
 % values are averaged when a single physical vertex value is needed.
 %
 % The exact solution uses the unfolded arclength r in [0,2L],
+%
 %   u(t,r) = exp(-lambda*t)*cos(pi*r/(2L)),
+%
 % lambda = (pi/(2L))^2.  This has Neumann boundary conditions at the two
 % physical endpoints r=0 and r=2L.
+%
+% Run headlessly, from this directory:
+%   matlab -batch "example_v_shaped"
+% The angles, grid sizes and the plotting flag are edited below.
 
 
 %% Using cp_matrices
 
-thisdir = fileparts(mfilename('fullpath'));
-repodir = fileparts(thisdir);
-addpath(thisdir);
-addpath(fullfile(repodir, 'cp_matrices'));
-addpath(fullfile(repodir, 'surfaces'));
+% Include the cp_matrices folder (edit as appropriate)
+addpath('../cp_matrices');
+
+% add functions for finding the closest points
+addpath('../surfaces');
 
 
 global ICPM2009BANDINGCHECKS
-oldICPM2009BANDINGCHECKS = ICPM2009BANDINGCHECKS;
-cleanupICPM2009BANDINGCHECKS = ...
-    onCleanup(@() reset_icpm2009bandingchecks(oldICPM2009BANDINGCHECKS));
+
+% the banding checks are switched on around the two-band construction
+% below and off again afterwards; this restores whatever the caller had
+old_bandingchecks = ICPM2009BANDINGCHECKS;
+cleanup_bandingchecks = ...
+    onCleanup(@() reset_icpm2009bandingchecks(old_bandingchecks));
 
 
 %% Problem parameters
 
 makePlots = true;
 
-angleDegrees = [90 120];
+% the opening angle at the vertex, in degrees
+angle_list = [90 120];
+
+% grid sizes for the convergence study
 hvals = 1./[200 400 800 1600];
 
 vertex = [0.5 0.5];
-branchLength = 0.4;
+branchlen = 0.4;
 
 p = 3;        % interpolation order
 order = 2;    % Laplacian order
 Tf = 0.01;
 
-allResults = struct([]);
+results = struct([]);
 
 
 %% Convergence study
 
-for angleNumber = 1:length(angleDegrees)
-  angleDeg = angleDegrees(angleNumber);
-  levelResults = repmat(emptyLevelResult(), length(hvals), 1);
+for ai = 1:length(angle_list)
+  angdeg = angle_list(ai);
+  lev = repmat(empty_level_result(), length(hvals), 1);
 
-  fprintf('\nV-shaped line, angle = %g degrees\n', angleDeg);
+  fprintf('\nV-shaped line, angle = %g degrees\n', angdeg);
 
-  for levelNumber = 1:length(hvals)
-    h = hvals(levelNumber);
-    makeLevelPlots = makePlots && (levelNumber == length(hvals));
+  for k = 1:length(hvals)
+    h = hvals(k);
+    % only the finest level is worth drawing
+    plotthis = makePlots && (k == length(hvals));
 
-    levelResults(levelNumber) = solveOneLevel(h, angleDeg, vertex, ...
-                                              branchLength, p, order, Tf, ...
-                                              makeLevelPlots, angleNumber);
+    lev(k) = solve_one_level(h, angdeg, vertex, branchlen, p, order, Tf, ...
+                             plotthis, ai);
 
     fprintf(['h = %g, points = %d, L_inf error = %g, ' ...
              'L_2 error = %g\n'], ...
-            h, levelResults(levelNumber).numPoints, ...
-            levelResults(levelNumber).errorLinf, ...
-            levelResults(levelNumber).errorL2);
+            h, lev(k).numpts, lev(k).err_inf, lev(k).err_l2);
   end
 
-  allResults(angleNumber).angleDeg = angleDeg;
-  allResults(angleNumber).h = hvals;
-  allResults(angleNumber).numPoints = [levelResults.numPoints];
-  allResults(angleNumber).errorsLinf = [levelResults.errorLinf];
-  allResults(angleNumber).errorsL2 = [levelResults.errorL2];
-  allResults(angleNumber).levels = levelResults;
+  results(ai).angdeg = angdeg;
+  results(ai).h = hvals;
+  results(ai).numpts = [lev.numpts];
+  results(ai).errs_inf = [lev.err_inf];
+  results(ai).errs_l2 = [lev.err_l2];
+  results(ai).levels = lev;
 end
 
 if (makePlots)
-  plotConvergenceSummary(allResults);
+  plotconv(results);
 end
 
 
-function level = solveOneLevel(h, angleDeg, vertex, branchLength, p, order, ...
-                               Tf, makePlots, angleNumber)
+%% ----------------------------------------------------------------------
+%% local functions
+%% ----------------------------------------------------------------------
+
+function lev = solve_one_level(h, angdeg, vertex, branchlen, p, order, ...
+                               Tf, makePlots, ai)
+%SOLVE_ONE_LEVEL  build the two glued branches at one grid size and solve
 
   global ICPM2009BANDINGCHECKS
+
+  % this is a bit dangerous: will break other less tightly banded
+  % codes, turn it off later
   ICPM2009BANDINGCHECKS = 1;
 
-  alpha = angleDeg*pi/180;
+  alpha = angdeg*pi/180;
   dA = [-sin(alpha/2) -cos(alpha/2)];
   dB = [ sin(alpha/2) -cos(alpha/2)];
 
-  endpointA = vertex + branchLength*dA;
-  endpointB = vertex + branchLength*dB;
+  endptA = vertex + branchlen*dA;
+  endptB = vertex + branchlen*dB;
 
   % Branch A is oriented from its physical endpoint to the vertex.
   % Branch B is oriented from the vertex to its physical endpoint.
-  pA = endpointA;  qA = vertex;
-  pB = vertex;     qB = endpointB;
+  pA = endptA;     qA = vertex;
+  pB = vertex;     qB = endptB;
 
-  dim = 2;
-  fdStenrad = order/2;
+  dim = 2;  % dimension
+  fd_stenrad = order/2;  % finite difference stencil radius
+  % The formula for bw is found in [Ruuth & Merriman 2008] and the 1.0002
+  % is a safety factor.
   bw = 1.0002*sqrt((dim-1)*((p+1)/2)^2 + ...
-                   ((fdStenrad+(p+1)/2)^2));
+                   ((fd_stenrad+(p+1)/2)^2));
 
   x1d = (0:h:1).';
   y1d = x1d;
@@ -108,44 +128,45 @@ function level = solveOneLevel(h, angleDeg, vertex, branchLength, p, order, ...
   [cpxA, cpyA, distA, bdyA, sA] = cpLineSegment2d(xx, yy, pA, qA);
   [cpxB, cpyB, distB, bdyB, sB] = cpLineSegment2d(xx, yy, pB, qB);
 
-  endpointCpfA = @(x, y) cpLineSegmentEndpointBoundary2d(x, y, pA, qA, 1);
-  endpointCpfB = @(x, y) cpLineSegmentEndpointBoundary2d(x, y, pB, qB, 2);
-  [cpxExtA, cpyExtA] = cpbar_2d(xx, yy, endpointCpfA);
-  [cpxExtB, cpyExtB] = cpbar_2d(xx, yy, endpointCpfB);
+  % cpbar of a cpf that reports only one endpoint as boundary: this is the
+  % same-branch extension, used everywhere except at the shared vertex
+  cpf_endptA = @(x, y) cp_endpoint_bdy(x, y, pA, qA, 1);
+  cpf_endptB = @(x, y) cp_endpoint_bdy(x, y, pB, qB, 2);
+  [cpbarxA, cpbaryA] = cpbar_2d(xx, yy, cpf_endptA);
+  [cpbarxB, cpbaryB] = cpbar_2d(xx, yy, cpf_endptB);
 
-  branchA = buildBranchMatrices2d(x1d, y1d, xx, yy, cpxA, cpyA, ...
-                                  cpxExtA, cpyExtA, distA, bdyA, sA, ...
-                                  h, bw, p, order);
-  branchB = buildBranchMatrices2d(x1d, y1d, xx, yy, cpxB, cpyB, ...
-                                  cpxExtB, cpyExtB, distB, bdyB, sB, ...
-                                  h, bw, p, order);
+  brA = build_branch(x1d, y1d, xx, yy, cpxA, cpyA, ...
+                     cpbarxA, cpbaryA, distA, bdyA, sA, ...
+                     h, bw, p, order);
+  brB = build_branch(x1d, y1d, xx, yy, cpxB, cpyB, ...
+                     cpbarxB, cpbaryB, distB, bdyB, sB, ...
+                     h, bw, p, order);
 
-  [EAA, EAB, EBA, EBB, crossRowsA, crossRowsB] = ...
-      buildVertexExtension(x1d, y1d, branchA, branchB, pA, qA, pB, qB, p);
+  [EAA, EAB, EBA, EBB, crossrowsA, crossrowsB] = ...
+      build_vertex_ext(x1d, y1d, brA, brB, pA, qA, pB, qB, p);
 
-  Lblock = blkdiag(branchA.L, branchB.L);
+  Lblock = blkdiag(brA.L, brB.L);
   Eblock = [EAA EAB; EBA EBB];
-  Rblock = blkdiag(branchA.R, branchB.R);
+  Rblock = blkdiag(brA.R, brB.R);
   M = lapsharp_unordered(Lblock, Eblock, Rblock);
 
   ICPM2009BANDINGCHECKS = 0;
 
-  rA = branchLength*branchA.sIn;
-  rB = branchLength + branchLength*branchB.sIn;
+  rA = branchlen*brA.sgin;
+  rB = branchlen + branchlen*brB.sgin;
 
-  u0A = exactHeatSolution(0, rA, branchLength);
-  u0B = exactHeatSolution(0, rB, branchLength);
+  u0A = uexact(0, rA, branchlen);
+  u0B = uexact(0, rB, branchlen);
   u = [u0A; u0B];
 
-  vertexA = setupVertexAveraging(x1d, y1d, xx, yy, branchA.innerband, ...
-                                 vertex, p);
-  vertexB = setupVertexAveraging(x1d, y1d, xx, yy, branchB.innerband, ...
-                                 vertex, p);
+  vertA = setup_vertex_avg(x1d, y1d, xx, yy, brA.innerband, vertex, p);
+  vertB = setup_vertex_avg(x1d, y1d, xx, yy, brB.innerband, vertex, p);
 
   % Crank-Nicolson has O(dt^2) time error; dt=O(h) keeps it aligned with
   % the second-order spatial convergence study.
   dt = h/4;
   numtimesteps = ceil(Tf/dt);
+  % adjust for integer number of steps
   dt = Tf / numtimesteps;
 
   I = speye(size(M));
@@ -153,11 +174,12 @@ function level = solveOneLevel(h, angleDeg, vertex, branchLength, p, order, ...
   B = I + 0.5*dt*M;
 
   for kt = 1:numtimesteps
+    % Crank-Nicolson timestepping
     u = A \ (B*u);
 
     uA = u(1:length(u0A));
     uB = u(length(u0A)+1:end);
-    [uA, uB] = averageVertexValues(uA, uB, vertexA, vertexB);
+    [uA, uB] = average_vertex(uA, uB, vertA, vertB);
     u = [uA; uB];
   end
 
@@ -165,71 +187,76 @@ function level = solveOneLevel(h, angleDeg, vertex, branchLength, p, order, ...
   uA = u(1:length(u0A));
   uB = u(length(u0A)+1:end);
 
+
+  %% Interpolation matrices for plotting on the two branches
+
   nplot = 500;
   [xpA, ypA] = paramLineSegment2d(nplot, pA, qA);
   [xpB, ypB] = paramLineSegment2d(nplot, pB, qB);
-  sPlot = linspace(0, 1, nplot).';
-  rPlotA = branchLength*sPlot;
-  rPlotB = branchLength + branchLength*sPlot;
+  splot = linspace(0, 1, nplot).';
+  rplotA = branchlen*splot;
+  rplotB = branchlen + branchlen*splot;
 
-  EplotA = interp2_matrix(x1d, y1d, xpA, ypA, p, branchA.innerband);
-  EplotB = interp2_matrix(x1d, y1d, xpB, ypB, p, branchB.innerband);
+  EplotA = interp2_matrix(x1d, y1d, xpA, ypA, p, brA.innerband);
+  EplotB = interp2_matrix(x1d, y1d, xpB, ypB, p, brB.innerband);
 
-  plotA = EplotA*uA;
-  plotB = EplotB*uB;
-  initialPlotA = EplotA*u0A;
-  initialPlotB = EplotB*u0B;
+  uplotA = EplotA*uA;
+  uplotB = EplotB*uB;
+  initplotA = EplotA*u0A;
+  initplotB = EplotB*u0B;
 
-  vertexAvg = 0.5*(plotA(end) + plotB(1));
-  plotA(end) = vertexAvg;
-  plotB(1) = vertexAvg;
+  % the two branches carry their own copy of the vertex; the physical
+  % value there is their average
+  vavg = 0.5*(uplotA(end) + uplotB(1));
+  uplotA(end) = vavg;
+  uplotB(1) = vavg;
 
-  exactPlotA = exactHeatSolution(t, rPlotA, branchLength);
-  exactPlotB = exactHeatSolution(t, rPlotB, branchLength);
+  exactplotA = uexact(t, rplotA, branchlen);
+  exactplotB = uexact(t, rplotB, branchlen);
 
-  err = [plotA - exactPlotA; plotB - exactPlotB];
-  errorLinf = norm(err, inf);
-  errorL2 = sqrt(mean(err.^2));
+  err = [uplotA - exactplotA; uplotB - exactplotB];
+  err_inf = norm(err, inf);
+  err_l2 = sqrt(mean(err.^2));
 
   if (makePlots)
-    plotLevelFigures(angleNumber, angleDeg, h, t, branchA, branchB, ...
-                     uA, uB, xpA, ypA, xpB, ypB, rPlotA, rPlotB, ...
-                     plotA, plotB, initialPlotA, initialPlotB, ...
-                     exactPlotA, exactPlotB, crossRowsA, crossRowsB);
+    plotlevel(ai, angdeg, h, t, brA, brB, uA, uB, xpA, ypA, xpB, ypB, ...
+              rplotA, rplotB, uplotA, uplotB, initplotA, initplotB, ...
+              exactplotA, exactplotB, crossrowsA, crossrowsB);
   end
 
-  level = emptyLevelResult();
-  level.h = h;
-  level.numPoints = length(uA) + length(uB);
-  level.errorLinf = errorLinf;
-  level.errorL2 = errorL2;
-  level.crossRowsA = length(crossRowsA);
-  level.crossRowsB = length(crossRowsB);
+  lev = empty_level_result();
+  lev.h = h;
+  lev.numpts = length(uA) + length(uB);
+  lev.err_inf = err_inf;
+  lev.err_l2 = err_l2;
+  lev.crossrowsA = length(crossrowsA);
+  lev.crossrowsB = length(crossrowsB);
 end
 
 
-function branch = buildBranchMatrices2d(x1d, y1d, xx, yy, cpx, cpy, ...
-                                        cpxExt, cpyExt, dist, bdy, s, ...
-                                        h, bw, p, order)
+function br = build_branch(x1d, y1d, xx, yy, cpx, cpy, ...
+                           cpbarx, cpbary, dist, bdy, s, ...
+                           h, bw, p, order)
+%BUILD_BRANCH  the two-band iCPM matrices L, E, R for one branch
 
-  bandInit = find(abs(dist) <= bw*h);
-  cpxInit = cpx(bandInit);  cpyInit = cpy(bandInit);
-  cpxExtInit = cpxExt(bandInit);  cpyExtInit = cpyExt(bandInit);
-  xInit = xx(bandInit);     yInit = yy(bandInit);
-  bdyInit = bdy(bandInit);  sInit = s(bandInit);
+  band_init = find(abs(dist) <= bw*h);
+  cpxg_init = cpx(band_init);        cpyg_init = cpy(band_init);
+  cpbarxg_init = cpbarx(band_init);  cpbaryg_init = cpbary(band_init);
+  xg_init = xx(band_init);           yg_init = yy(band_init);
+  bdyg_init = bdy(band_init);        sg_init = s(band_init);
 
-  Etemp = interp2_matrix(x1d, y1d, cpxExtInit, cpyExtInit, p);
+  Etemp = interp2_matrix(x1d, y1d, cpbarxg_init, cpbaryg_init, p);
   [~, j] = find(Etemp);
   innerband = unique(j);
 
-  Ltemp = laplacian_2d_matrix(x1d, y1d, order, innerband, bandInit);
+  Ltemp = laplacian_2d_matrix(x1d, y1d, order, innerband, band_init);
   [~, j] = find(Ltemp);
   outerbandtemp = unique(j);
-  outerband = bandInit(outerbandtemp);
+  outerband = band_init(outerbandtemp);
 
-  cpxOut = cpxInit(outerbandtemp);  cpyOut = cpyInit(outerbandtemp);
-  xOut = xInit(outerbandtemp);      yOut = yInit(outerbandtemp);
-  bdyOut = bdyInit(outerbandtemp);  sOut = sInit(outerbandtemp);
+  cpxgout = cpxg_init(outerbandtemp);  cpygout = cpyg_init(outerbandtemp);
+  xgout = xg_init(outerbandtemp);      ygout = yg_init(outerbandtemp);
+  bdygout = bdyg_init(outerbandtemp);  sgout = sg_init(outerbandtemp);
 
   L = Ltemp(:, outerbandtemp);
   E = Etemp(outerbandtemp, innerband);
@@ -242,212 +269,215 @@ function branch = buildBranchMatrices2d(x1d, y1d, xx, yy, cpx, cpy, ...
     R(k, I) = 1;
   end
 
-  branch.L = L;
-  branch.E = E;
-  branch.R = R;
-  branch.innerband = innerband;
-  branch.outerband = outerband;
-  branch.cpxOut = cpxOut;
-  branch.cpyOut = cpyOut;
-  branch.xOut = xOut;
-  branch.yOut = yOut;
-  branch.bdyOut = bdyOut;
-  branch.sOut = sOut;
-  branch.sIn = R*sOut;
-  branch.xIn = R*xOut;
-  branch.yIn = R*yOut;
+  br.L = L;
+  br.E = E;
+  br.R = R;
+  br.innerband = innerband;
+  br.outerband = outerband;
+  br.cpxgout = cpxgout;
+  br.cpygout = cpygout;
+  br.xgout = xgout;
+  br.ygout = ygout;
+  br.bdygout = bdygout;
+  br.sgout = sgout;
+  br.sgin = R*sgout;
+  br.xgin = R*xgout;
+  br.ygin = R*ygout;
 end
 
 
-function [EAA, EAB, EBA, EBB, crossRowsA, crossRowsB] = ...
-    buildVertexExtension(x1d, y1d, branchA, branchB, pA, qA, pB, qB, p)
+function [EAA, EAB, EBA, EBB, crossrowsA, crossrowsB] = ...
+    build_vertex_ext(x1d, y1d, brA, brB, pA, qA, pB, qB, p)
+%BUILD_VERTEX_EXT  route the vertex extension rows through the other branch
 
-  EAA = branchA.E;
-  EBB = branchB.E;
+  EAA = brA.E;
+  EBB = brB.E;
   EAB = sparse(size(EAA, 1), size(EBB, 2));
   EBA = sparse(size(EBB, 1), size(EAA, 2));
 
-  endpointTol = 100*eps(1);
+  endpttol = 100*eps(1);
 
-  endpointIdA = branchA.bdyOut;
-  endpointIdA(hypot(branchA.cpxOut - pA(1), branchA.cpyOut - pA(2)) <= ...
-              endpointTol) = 1;
-  endpointIdA(hypot(branchA.cpxOut - qA(1), branchA.cpyOut - qA(2)) <= ...
-              endpointTol) = 2;
+  endptidA = brA.bdygout;
+  endptidA(hypot(brA.cpxgout - pA(1), brA.cpygout - pA(2)) <= endpttol) = 1;
+  endptidA(hypot(brA.cpxgout - qA(1), brA.cpygout - qA(2)) <= endpttol) = 2;
 
-  endpointIdB = branchB.bdyOut;
-  endpointIdB(hypot(branchB.cpxOut - pB(1), branchB.cpyOut - pB(2)) <= ...
-              endpointTol) = 1;
-  endpointIdB(hypot(branchB.cpxOut - qB(1), branchB.cpyOut - qB(2)) <= ...
-              endpointTol) = 2;
+  endptidB = brB.bdygout;
+  endptidB(hypot(brB.cpxgout - pB(1), brB.cpygout - pB(2)) <= endpttol) = 1;
+  endptidB(hypot(brB.cpxgout - qB(1), brB.cpygout - qB(2)) <= endpttol) = 2;
 
   % Only the shared vertex is glued.  The two physical endpoints keep their
   % same-branch cpbar extension, giving Neumann endpoint conditions.
-  crossRowsA = find(endpointIdA == 2);
-  crossRowsB = find(endpointIdB == 1);
+  crossrowsA = find(endptidA == 2);
+  crossrowsB = find(endptidB == 1);
 
   cpfA = @(x, y) cpLineSegment2d(x, y, pA, qA);
   cpfB = @(x, y) cpLineSegment2d(x, y, pB, qB);
-  RA_out = angle2d(branchA.xOut, branchA.yOut, cpfA, qA);
-  RB_out = angle2d(branchB.xOut, branchB.yOut, cpfB, pB);
+  RA_out = angle2d(brA.xgout, brA.ygout, cpfA, qA);
+  RB_out = angle2d(brB.xgout, brB.ygout, cpfB, pB);
   Rpi = [-1 0; 0 -1];
   RAtoB = RB_out * Rpi * RA_out.';
   RBtoA = RA_out * Rpi * RB_out.';
 
-  if (~isempty(crossRowsA))
-    x0 = branchA.cpxOut(crossRowsA);
-    y0 = branchA.cpyOut(crossRowsA);
-    dx0 = branchA.xOut(crossRowsA) - x0;
-    dy0 = branchA.yOut(crossRowsA) - y0;
+  if (~isempty(crossrowsA))
+    x0 = brA.cpxgout(crossrowsA);
+    y0 = brA.cpygout(crossrowsA);
+    dx0 = brA.xgout(crossrowsA) - x0;
+    dy0 = brA.ygout(crossrowsA) - y0;
 
     xr = x0 + RAtoB(1,1)*dx0 + RAtoB(1,2)*dy0;
     yr = y0 + RAtoB(2,1)*dx0 + RAtoB(2,2)*dy0;
 
     [cpxAtoB, cpyAtoB] = cpLineSegment2d(xr, yr, pB, qB);
-    EAB(crossRowsA, :) = interp2_matrix(x1d, y1d, cpxAtoB, cpyAtoB, ...
-                                        p, branchB.innerband);
-    EAA(crossRowsA, :) = 0;
+    EAB(crossrowsA, :) = interp2_matrix(x1d, y1d, cpxAtoB, cpyAtoB, ...
+                                        p, brB.innerband);
+    EAA(crossrowsA, :) = 0;
   end
 
-  if (~isempty(crossRowsB))
-    x0 = branchB.cpxOut(crossRowsB);
-    y0 = branchB.cpyOut(crossRowsB);
-    dx0 = branchB.xOut(crossRowsB) - x0;
-    dy0 = branchB.yOut(crossRowsB) - y0;
+  if (~isempty(crossrowsB))
+    x0 = brB.cpxgout(crossrowsB);
+    y0 = brB.cpygout(crossrowsB);
+    dx0 = brB.xgout(crossrowsB) - x0;
+    dy0 = brB.ygout(crossrowsB) - y0;
 
     xr = x0 + RBtoA(1,1)*dx0 + RBtoA(1,2)*dy0;
     yr = y0 + RBtoA(2,1)*dx0 + RBtoA(2,2)*dy0;
 
     [cpxBtoA, cpyBtoA] = cpLineSegment2d(xr, yr, pA, qA);
-    EBA(crossRowsB, :) = interp2_matrix(x1d, y1d, cpxBtoA, cpyBtoA, ...
-                                        p, branchA.innerband);
-    EBB(crossRowsB, :) = 0;
+    EBA(crossrowsB, :) = interp2_matrix(x1d, y1d, cpxBtoA, cpyBtoA, ...
+                                        p, brA.innerband);
+    EBB(crossrowsB, :) = 0;
   end
 end
 
 
-function [cpx, cpy, dist, bdy] = ...
-    cpLineSegmentEndpointBoundary2d(x, y, p, q, endpointId)
+function [cpx, cpy, dist, bdy] = cp_endpoint_bdy(x, y, p, q, endptid)
+%CP_ENDPOINT_BDY  cpLineSegment2d reporting only one endpoint as boundary
 
   [cpx, cpy, dist, bdy] = cpLineSegment2d(x, y, p, q);
-  bdy(bdy ~= endpointId) = 0;
+  bdy(bdy ~= endptid) = 0;
 end
 
 
-function vertexInfo = setupVertexAveraging(x1d, y1d, xx, yy, innerband, ...
-                                           vertex, p)
+function v = setup_vertex_avg(x1d, y1d, xx, yy, innerband, vertex, p)
+%SETUP_VERTEX_AVG  how to read the vertex value off a branch, and where to
+%   write the averaged one back
 
-  vertexInfo.E = interp2_matrix(x1d, y1d, vertex(1), vertex(2), p, ...
-                                innerband);
+  v.E = interp2_matrix(x1d, y1d, vertex(1), vertex(2), p, innerband);
 
-  xInner = xx(innerband);
-  yInner = yy(innerband);
-  nodeTol = (x1d(2) - x1d(1))*1e-8;
+  xgin = xx(innerband);
+  ygin = yy(innerband);
+  nodetol = (x1d(2) - x1d(1))*1e-8;
 
-  I = find((abs(xInner - vertex(1)) <= nodeTol) & ...
-           (abs(yInner - vertex(2)) <= nodeTol));
+  I = find((abs(xgin - vertex(1)) <= nodetol) & ...
+           (abs(ygin - vertex(2)) <= nodetol));
   if (isempty(I))
-    [dummy, I] = min(hypot(xInner - vertex(1), yInner - vertex(2)));
+    [~, I] = min(hypot(xgin - vertex(1), ygin - vertex(2)));
   end
 
-  vertexInfo.writeIdx = I(1);
+  v.writeidx = I(1);
 end
 
 
-function [uA, uB] = averageVertexValues(uA, uB, vertexA, vertexB)
+function [uA, uB] = average_vertex(uA, uB, vertA, vertB)
+%AVERAGE_VERTEX  replace the two branch copies of the vertex by their mean
 
-  vertexValueA = vertexA.E*uA;
-  vertexValueB = vertexB.E*uB;
-  vertexAvg = 0.5*(vertexValueA + vertexValueB);
+  vvalA = vertA.E*uA;
+  vvalB = vertB.E*uB;
+  vavg = 0.5*(vvalA + vvalB);
 
-  uA(vertexA.writeIdx) = vertexAvg;
-  uB(vertexB.writeIdx) = vertexAvg;
+  uA(vertA.writeidx) = vavg;
+  uB(vertB.writeidx) = vavg;
 end
 
 
-function u = exactHeatSolution(t, r, branchLength)
+function u = uexact(t, r, branchlen)
+%UEXACT  the exact solution in the unfolded arclength r
 
-  lambda = (pi/(2*branchLength))^2;
-  u = exp(-lambda*t)*cos(pi*r/(2*branchLength));
+  lambda = (pi/(2*branchlen))^2;
+  u = exp(-lambda*t)*cos(pi*r/(2*branchlen));
 end
 
 
-function plotLevelFigures(angleNumber, angleDeg, h, t, branchA, branchB, ...
-                          uA, uB, xpA, ypA, xpB, ypB, rPlotA, rPlotB, ...
-                          plotA, plotB, initialPlotA, initialPlotB, ...
-                          exactPlotA, exactPlotB, crossRowsA, crossRowsB)
+function plotlevel(ai, angdeg, h, t, brA, brB, uA, uB, ...
+                   xpA, ypA, xpB, ypB, rplotA, rplotB, ...
+                   uplotA, uplotB, initplotA, initplotB, ...
+                   exactplotA, exactplotB, crossrowsA, crossrowsB)
+%PLOTLEVEL  the band, the solution and the error at one grid size
 
-  figBase = 10*(angleNumber - 1) + 1;
+  figbase = 10*(ai - 1) + 1;
 
-  figure(figBase);
-  plot2d_compdomain([uA; uB], [branchA.xIn; branchB.xIn], ...
-                    [branchA.yIn; branchB.yIn], h, h, figBase);
+  % plot over computation band
+  figure(figbase);
+  plot2d_compdomain([uA; uB], [brA.xgin; brB.xgin], ...
+                    [brA.ygin; brB.ygin], h, h, figbase);
   hold on;
   plot(xpA, ypA, 'k-', 'linewidth', 2);
   plot(xpB, ypB, 'k--', 'linewidth', 2);
-  title(['embedded domain: angle ' num2str(angleDeg) ...
+  title(['embedded domain: angle ' num2str(angdeg) ...
          ' degrees, t = ' num2str(t)]);
   xlabel('x'); ylabel('y');
 
-  figure(figBase + 1); clf;
-  hA = plot(rPlotA, plotA, 'b-');
+  % plot value on the unfolded line
+  figure(figbase + 1); clf;
+  hA = plot(rplotA, uplotA, 'b-');
   hold on;
-  hB = plot(rPlotB, plotB, 'c-');
-  hExact = plot([rPlotA; rPlotB], [exactPlotA; exactPlotB], 'r--');
-  hInitial = plot([rPlotA; rPlotB], [initialPlotA; initialPlotB], 'g-.');
+  hB = plot(rplotB, uplotB, 'c-');
+  hexact = plot([rplotA; rplotB], [exactplotA; exactplotB], 'r--');
+  hinit = plot([rplotA; rplotB], [initplotA; initplotB], 'g-.');
   title(['soln at time ' num2str(t) ', V angle ' ...
-         num2str(angleDeg) ' degrees']);
+         num2str(angdeg) ' degrees']);
   xlabel('unfolded arclength r'); ylabel('u');
-  legend([hA hB hExact hInitial], ...
+  legend([hA hB hexact hinit], ...
          'branch A iCPM', 'branch B iCPM', 'exact answer', ...
          'initial condition', 'Location', 'SouthWest');
 
-  figure(figBase + 2); clf;
-  plot(rPlotA, plotA - exactPlotA, 'b-');
+  figure(figbase + 2); clf;
+  plot(rplotA, uplotA - exactplotA, 'b-');
   hold on;
-  plot(rPlotB, plotB - exactPlotB, 'c-');
+  plot(rplotB, uplotB - exactplotB, 'c-');
   title(['error at time ' num2str(t) ', V angle ' ...
-         num2str(angleDeg) ' degrees']);
+         num2str(angdeg) ' degrees']);
   xlabel('unfolded arclength r'); ylabel('error');
   legend('branch A', 'branch B', 'Location', 'SouthWest');
 
   fprintf('Cross-branch extension rows A->B / B->A: %d / %d\n', ...
-          length(crossRowsA), length(crossRowsB));
+          length(crossrowsA), length(crossrowsB));
 end
 
 
-function plotConvergenceSummary(allResults)
+function plotconv(results)
+%PLOTCONV  the error against the number of points, one panel per angle
 
   figure(100); clf;
 
-  for k = 1:length(allResults)
-    N = allResults(k).numPoints;
-    eInf = allResults(k).errorsLinf;
-    eL2 = allResults(k).errorsL2;
-    refScale = max(eInf(1), eL2(1));
-    ref = refScale*(N(1)./N).^2;
+  for k = 1:length(results)
+    N = results(k).numpts;
+    e_inf = results(k).errs_inf;
+    e_l2 = results(k).errs_l2;
+    refscale = max(e_inf(1), e_l2(1));
+    ref = refscale*(N(1)./N).^2;
 
-    subplot(1, length(allResults), k);
-    loglog(N, eInf, 'bo-', N, eL2, 'rs-', N, ref, 'k--');
+    subplot(1, length(results), k);
+    loglog(N, e_inf, 'bo-', N, e_l2, 'rs-', N, ref, 'k--');
     grid on;
     xlabel('number of points');
     ylabel('error');
-    title(['V angle ' num2str(allResults(k).angleDeg) ' degrees']);
+    title(['V angle ' num2str(results(k).angdeg) ' degrees']);
     legend('L_\infty error', 'L_2 error', 'O(h^2)', ...
            'Location', 'SouthWest');
   end
 end
 
 
-function level = emptyLevelResult()
+function lev = empty_level_result()
 
-  level = struct('h', [], 'numPoints', [], 'errorLinf', [], ...
-                 'errorL2', [], 'crossRowsA', [], 'crossRowsB', []);
+  lev = struct('h', [], 'numpts', [], 'err_inf', [], ...
+               'err_l2', [], 'crossrowsA', [], 'crossrowsB', []);
 end
 
 
-function reset_icpm2009bandingchecks(oldValue)
+function reset_icpm2009bandingchecks(oldvalue)
 
   global ICPM2009BANDINGCHECKS
-  ICPM2009BANDINGCHECKS = oldValue;
+  ICPM2009BANDINGCHECKS = oldvalue;
 end
