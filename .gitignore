@@ -23,8 +23,7 @@ python/build
 *.tar.gz
 *.zip
 
-# Agnet
-CLAUDE.md
+# Local agent files
 .agnets
 .codex
 

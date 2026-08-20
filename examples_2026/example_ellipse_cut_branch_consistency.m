@@ -26,6 +26,50 @@
 % The reflection is an isometry, so the two curves are the SAME
 % 1-manifold: same total length, same arclength parameter, same intrinsic
 % geometry.
+%
+% FIVE GLUES, because a rotation cannot be second order at this corner.
+% A row clamped to a cut point has to be told where the curve continues.
+% Two families do that here.
+%
+%   rotation   turn the node about the cut point so that this arc's
+%              outward tangent lands on minus the other's.  This carries
+%              Euclidean offsets across unchanged, and that is the
+%              trouble: writing (X, Y) for the node's tangential and
+%              normal offsets from the cut point, a circle of curvature
+%              kappa puts the closest point at arclength
+%              X + kappa*X*Y + O(3), so the rotation delivers the
+%              arclength (-X)*(1 - kappa_o*Y) where the curve wants
+%              (-X)*(1 + kappa_k*Y).  It is wrong by
+%              |X|*|Y|*(kappa_k + kappa_o) = O(dx^2) -- with NO tangent in
+%              it.  Divided by the dx^2 of the Laplacian that is an O(1)
+%              truncation error at the handful of rows near the cut, and
+%              an O(1) residual at O(1) rows of an elliptic solve on a
+%              curve costs O(dx) in the solution, spread over the whole
+%              manifold.  So the rotation is first order however good the
+%              tangent is, and the exact-R column below shows it: on the
+%              flipped curve the reflection reverses the sign of the
+%              curvature, kappa_k + kappa_o = 2*kappa, the worst case.
+%
+%   tube       read the node's arclength offset xi past the cut point on
+%              THIS arc's osculating circle, and take the point of the
+%              other arc at the same offset xi.  One smooth arclength
+%              coordinate per branch, so the extension has no kink and the
+%              truncation error falls back to the O(dx) of the ordinary
+%              closest point method.  Second order.  See tube_map.
+%
+% The tube glue needs a curvature as well as a tangent, and the accuracy
+% it needs is only O(dx) -- against O(dx^2) for the tangent, which is what
+% d_k2 already delivers.  Both come out of the closest point queries d_k2
+% already makes: cpbar and cp2bar are points OF the arc, so writing them
+% in the frame the tangent gives and fitting Y = kappa*X^2/2 costs nothing
+% extra.  That is cp_curvature, and the last variant uses it, so it is a
+% closest point method in the honest sense -- no analytic geometry of
+% either arc anywhere in the glue.
+%
+% The right-hand side at a glued row now uses f at the parameter the glue
+% delivers, not f at the cut point.  A row that stands for u somewhere
+% must be asked to satisfy the equation there; the difference is O(dx) at
+% O(1) rows, which moves the constant and not the rate.
 
 % adjust as appropriate
 addpath('../cp_matrices');
@@ -65,7 +109,21 @@ else
   ycut_list = [0.5 0.3];
 end
 
-hvals = 0.02*2.^-(0:7);
+% Five levels, stopping at dx = 1.25e-3, which is where this
+% discretization runs out of arithmetic.  A degree-3 interpolation weight
+% built from coordinates of size X carries ~eps*X/dx of rounding and the
+% Laplacian divides by dx^2, so the solution error picks up a floor
+%
+%     ~eps*X/dx^3  =  2e-7 at dx = 1.25e-3,  2e-6 at half that,
+%
+% and past that every column turns and RISES: 1e-5 at dx = 3.1e-4 and 6e-5
+% at dx = 1.6e-4, all six columns landing on the same number.  It is not
+% the glue -- the uncut baseline on the plain ellipse, which glues nothing,
+% hits those same values at those same dx.  A rotation glue never meets the
+% floor because its own O(dx) error stays above it; a second-order glue
+% does, and pretending otherwise would only measure round-off.  Add levels
+% here to see it.
+hvals = 0.02*2.^-(0:4);
 
 dim = 2;    % dimension
 p = 3;      % interpolation degree
@@ -95,7 +153,8 @@ else
   exactlabel = 'exact R = I';
   baselabel = 'exact iCPM (uncut)';
 end
-varlabels = {'rotation from d_k', 'rotation from d_{k2}', exactlabel};
+varlabels = {'rotation from d_k', 'rotation from d_{k2}', exactlabel, ...
+             'tube, exact', 'tube, d_{k2} + \kappa from cp'};
 nvar = length(varlabels);
 % the surface-error figure has the uncut curve alongside the three
 varlabels4 = [{baselabel} varlabels];
@@ -181,6 +240,29 @@ for ci = 1:length(ycut_list)
   end
   thetaex = glue_angles(tauex{1}, tauex{2});
 
+  % Which end of each arc a cut point is: +1 where increasing t leads INTO
+  % the arc.  Branch 1 is [t1 t2] and branch 2 is [t2 t1+2pi], so cut
+  % point 1 starts the first and ends the second.  This is a labelling,
+  % not geometry to be estimated.
+  dirs = [1 -1; -1 1];
+
+  % The exact glues.  Neither depends on the grid, so both are built once:
+  % the rotation from the exact tangents, and the tube glue from the exact
+  % tangents and the exact curvatures.  The tube one is also the reference
+  % the cross-branch measures use for a tube variant, since the rotation
+  % reference is itself off by the O(dx^2) those measures are after.
+  tauex3 = zeros(2,2,2);
+  tauex3(1,:,:) = tauex{1};
+  tauex3(2,:,:) = tauex{2};
+  kapex = zeros(2,2);
+  for jb = 1:2
+    for m = 1:2
+      kapex(jb,m) = frame_curvature(tv(m), dirs(jb,m), geo{jb}.yflip, a, b);
+    end
+  end
+  glex_rot = make_glue_rot(tauex3);
+  glex_tube = make_glue_tube(tauex3, kapex);
+
   err = nan(nvar+1, nh);    % surface L_inf error, baseline then the three
   gap = nan(nvar, nh);      % max |u_A - u_B| at the shared rotated nodes
   vtx = nan(nvar, nh);      % max |u_A(v) - u_B(v)|, on the manifold
@@ -190,6 +272,7 @@ for ci = 1:length(ycut_list)
   nrot = nan(1, nh);        % how many shared rotated nodes there are
   nshare = nan(1, nh);      % how many shared nodes there are
   thetamax = nan(2, nh);    % max |theta|, for reference
+  kaperr = nan(1, nh);      % max |kappa_est - kappa| at the cut points
 
   fprintf(['\n==== %s, cut at y = %g: sin t = %.4f, cut-point kappa = ' ...
            '%.4f ====\n'], geoname, yc, s0, kappa);
@@ -224,7 +307,7 @@ for ci = 1:length(ycut_list)
     dcorner(k) = min(abs(wrapangle(outw.terr - tv)).*sqg);
 
     %% The nodes the two halves have in common
-    sh = shared_points(br, V, geo, thetaex);
+    sh = shared_points(br, V, geo, thetaex, glex_tube);
     nrot(k) = sum(sh.rot);
     nshare(k) = length(sh.i1);
     if (nrot(k) == 0)
@@ -232,25 +315,43 @@ for ci = 1:length(ycut_list)
              'carried by the other; there is nothing to compare'], dx);
     end
 
-    %% Endpoint tangents, and the glue rotation each scheme produces
+    %% Endpoint tangents and curvatures, and the glue each variant builds
     % thetamax is now the error in the angle, |theta - theta_exact|, not
     % |theta| itself: on the flipped curve the exact angle is not zero.
-    theta = zeros(2, 2, nvar);   % (branch, vertex, variant)
-    theta(:,:,nvar) = thetaex;   % the last variant is the exact rotation
+    tauo = zeros(2, 2, 2, 3);    % (branch, cut point, component, scheme)
+    tauo(1,:,:,1) = tauex{1};    % scheme 1 exact, 2 is d_k, 3 is d_k2
+    tauo(2,:,:,1) = tauex{2};
     for scheme = 1:2
-      tauA = [cp_tangent(br{1}, V(1,:), scheme); ...
-              cp_tangent(br{1}, V(2,:), scheme)];
-      tauB = [cp_tangent(br{2}, V(1,:), scheme); ...
-              cp_tangent(br{2}, V(2,:), scheme)];
-      theta(:,:,scheme) = glue_angles(tauA, tauB);
-      thetamax(scheme,k) = ...
-          max(max(abs(wrapangle(theta(:,:,scheme) - thetaex))));
+      for jb = 1:2
+        for m = 1:2
+          tauo(jb,m,:,scheme+1) = cp_tangent(br{jb}, V(m,:), scheme);
+        end
+      end
+      th = glue_angles(squeeze(tauo(1,:,:,scheme+1)), ...
+                       squeeze(tauo(2,:,:,scheme+1)));
+      thetamax(scheme,k) = max(max(abs(wrapangle(th - thetaex))));
     end
+
+    % the curvature the same reflected closest points give, in the frame
+    % d_k2 gives: no new cp evaluations, no reach past what d_k2 used
+    kapest = zeros(2,2);
+    for jb = 1:2
+      for m = 1:2
+        kapest(jb,m) = cp_curvature(br{jb}, V(m,:), ...
+                                    -squeeze(tauo(jb,m,:,3)).');
+      end
+    end
+    kaperr(k) = max(max(abs(kapest - kapex)));
+
+    glv = {make_glue_rot(squeeze(tauo(:,:,:,2))), ...
+           make_glue_rot(squeeze(tauo(:,:,:,3))), ...
+           glex_rot, ...
+           glex_tube, ...
+           make_glue_tube(squeeze(tauo(:,:,:,3)), kapest)};
 
     %% Solve, once per variant, and compare the halves node by node
     for iv = 1:nvar
-      out = icpm_solve(br, theta(:,:,iv), x1d, y1d, p, a, b, cen, ...
-                       ufun, ffun);
+      out = icpm_solve(br, glv{iv}, x1d, y1d, p, a, b, cen, ufun, ffun);
       if (out.rowsum > 1e-10)
         error('extension matrix rows do not sum to one (%g)', out.rowsum);
       end
@@ -258,8 +359,16 @@ for ci = 1:length(ycut_list)
       % each half against the value its own unknown stands for; on the
       % plain ellipse those are the same number and eA - eB is just
       % u_A - u_B
-      eA = out.ubr{1}(sh.i1) - ufun(sh.tA);
-      eB = out.ubr{2}(sh.i2) - ufun(sh.tB);
+      % A tube variant is measured against the exact tube reference and a
+      % rotation variant against the exact rotation one: each variant
+      % against the value its own family's exact glue defines.
+      if strcmp(glv{iv}.type, 'tube')
+        refA = sh.tAt;  refB = sh.tBt;
+      else
+        refA = sh.tA;   refB = sh.tB;
+      end
+      eA = out.ubr{1}(sh.i1) - ufun(refA);
+      eB = out.ubr{2}(sh.i2) - ufun(refB);
 
       gap(iv,k) = norm(eA(sh.rot) - eB(sh.rot), inf);
       branch(iv,k) = max(norm(eA(sh.rot), inf), norm(eB(sh.rot), inf));
@@ -272,10 +381,13 @@ for ci = 1:length(ycut_list)
       vtx(iv,k) = norm(uAv - uBv, inf);
     end
 
-    fprintf(['dx = %-8.4g shared %-4d rot %-3d both %-3d dth %8.2e %8.2e   ' ...
-             'gap %9.3e %9.3e %9.3e   vtx %9.3e %9.3e %9.3e\n'], ...
-            dx, nshare(k), nrot(k), sh.nboth, ...
-            thetamax(1,k), thetamax(2,k), gap(:,k), vtx(:,k));
+    fprintf('dx = %-8.4g shared %-4d rot %-3d both %-3d dth %8.2e %8.2e', ...
+            dx, nshare(k), nrot(k), sh.nboth, thetamax(1,k), thetamax(2,k));
+    fprintf('   gap');
+    fprintf(' %9.3e', gap(:,k));
+    fprintf('   vtx');
+    fprintf(' %9.3e', vtx(:,k));
+    fprintf('\n');
   end
 
   %% Convergence table
@@ -362,6 +474,8 @@ for ci = 1:length(ycut_list)
   fprintf('\nfitted rate of the angle error |theta - theta_exact|:');
   fprintf(' d_k %5.2f, d_k2 %5.2f\n', ...
           fitrate(hvals, thetamax(1,:)), fitrate(hvals, thetamax(2,:)));
+  fprintf(['fitted rate of the curvature error |kappa_est - kappa|: ' ...
+           '%5.2f  (O(dx) is enough)\n'], fitrate(hvals, kaperr));
   fprintf(['arclength from the nearest cut point to the uncut baseline''s ' ...
            'worst point,\n  as a multiple of dx:']);
   fprintf(' %.1f', dcorner./hvals);
@@ -389,7 +503,7 @@ for ci = 1:length(ycut_list)
   % than any level in the convergence study -- the point is to see the
   % nodes, not the accuracy -- so this solve is for the picture only and
   % none of the numbers above come from it.
-  outshow = icpm_solve(brs, thetaex, xs1d, ys1d, p, a, b, cen, ufun, ffun);
+  outshow = icpm_solve(brs, glex_tube, xs1d, ys1d, p, a, b, cen, ufun, ffun);
   ushow = outshow.ubr;
   cl = [min([ushow{1}; ushow{2}]) max([ushow{1}; ushow{2}])];
 
@@ -647,7 +761,7 @@ function th = glue_angles(tauA, tauB)
   end
 end
 
-function sh = shared_points(br, V, geo, thetaex)
+function sh = shared_points(br, V, geo, thetaex, gltube)
 %SHARED_POINTS  the grid nodes carrying an unknown in BOTH halves
 %   The unknowns live on the inner bands, which are stored as global
 %   linear indices into the grid, so the overlap is their intersection.
@@ -674,8 +788,15 @@ function sh = shared_points(br, V, geo, thetaex)
 %   coincide, the raw difference is O(dx) whatever the scheme does, and
 %   what has to be compared is each half's own error.
 %
+%   Two references are returned, one per glue family.  sh.tA and sh.tB use
+%   the exact ROTATION, which is what a rotation variant is after.  sh.tAt
+%   and sh.tBt use the exact TUBE glue, which is what a tube variant is
+%   after -- and is the better proxy for the true continuation, the
+%   rotation one being off by exactly the O(dx^2) these measures resolve.
+%
 %     sh.i1, sh.i2   positions in inner band 1 and inner band 2
 %     sh.tA, sh.tB   the parameter each half's unknown stands for
+%     sh.tAt, sh.tBt the same, for the tube glue
 %     sh.rot         clamped to a cut point by one of the two halves
 %     sh.vid         which cut point, where rot holds
 %     sh.x, sh.y     coordinates of the shared nodes
@@ -702,9 +823,11 @@ function sh = shared_points(br, V, geo, thetaex)
   sh.nboth = sum((vid{1} ~= 0) & (vid{2} ~= 0));
 
   t = cell(2,1);
+  tt = cell(2,1);
   for k = 1:2
     o = 3 - k;
     t{k} = geo{k}.parfun(cp{k}(:,1), cp{k}(:,2));
+    tt{k} = t{k};
     m = find(vid{k} ~= 0);
     if ~isempty(m)
       th = thetaex(k, vid{k}(m)).';
@@ -716,10 +839,24 @@ function sh = shared_points(br, V, geo, thetaex)
       yr = y0 + sin(th).*ddx + cos(th).*ddy;
       [cxr, cyr] = geo{o}.cpf(xr, yr);
       t{k}(m) = geo{o}.parfun(cxr, cyr);
+
+      for j = 1:size(V,1)
+        mm = m(vid{k}(m) == j);
+        if isempty(mm)
+          continue;
+        end
+        [xt, yt] = tube_map(sh.x(mm), sh.y(mm), V(j,:), ...
+                            gltube.tin{k,j}, gltube.kap(k,j), ...
+                            gltube.tin{o,j}, gltube.kap(o,j));
+        [cxt, cyt] = geo{o}.cpf(xt, yt);
+        tt{k}(mm) = geo{o}.parfun(cxt, cyt);
+      end
     end
   end
   sh.tA = t{1};
   sh.tB = t{2};
+  sh.tAt = tt{1};
+  sh.tBt = tt{2};
 end
 
 
@@ -923,20 +1060,157 @@ function tau = cp_tangent(s, v, scheme)
 end
 
 
-function out = icpm_solve(br, theta, x1d, y1d, p, a, b, cen, ufun, ffun)
+function gl = make_glue_rot(tauo)
+%MAKE_GLUE_ROT  the rigid rotation glue from the outward tangents
+%   tauo(branch, cut point, component).  gl.theta(k,j) is the angle branch
+%   k turns its clamped rows through at cut point j.
+
+  gl.type = 'rot';
+  gl.theta = glue_angles(squeeze(tauo(1,:,:)), squeeze(tauo(2,:,:)));
+end
+
+
+function gl = make_glue_tube(tauo, kap)
+%MAKE_GLUE_TUBE  the osculating-circle glue from tangents and curvatures
+%   Per (branch, cut point) it keeps the tangent pointing INTO that arc and
+%   the curvature in the frame tube_map works in, which is the bending
+%   towards rot90 of that tangent.  Nothing else about either arc is used.
+
+  gl.type = 'tube';
+  gl.tin = cell(2,2);
+  gl.kap = kap;
+  for k = 1:2
+    for j = 1:2
+      gl.tin{k,j} = -squeeze(tauo(k,j,:)).';
+    end
+  end
+end
+
+
+function [qx, qy] = tube_map(x, y, v, tink, kapk, tino, kapo)
+%TUBE_MAP  where the curve continues, in arclength rather than by rotation
+%   In the frame at the cut point v with tink pointing INTO branch k and
+%   nk = rot90(tink), a node at offsets (X, Y) has, on branch k's
+%   osculating circle, the closest point at arclength
+%
+%     s = atan2(X, 1/kappa_k - Y)/kappa_k     (kappa_k > 0),
+%
+%   which is negative for a node past the end; xi = -s is how far past the
+%   cut point the curve has to be continued.  The answer is the point of
+%   branch o at that same arclength, taken on ITS osculating circle,
+%
+%     q = v + tino*sin(kappa_o*xi)/kappa_o
+%           + no*(1 - cos(kappa_o*xi))/kappa_o.
+%
+%   The normal offset Y plays no part beyond setting s: the caller projects
+%   q onto the real arc and branch o's extension is constant along its
+%   normals, so only the arclength is being asked for.  A rigid rotation is
+%   what this reduces to when the curvatures are dropped, and the term it
+%   drops is the one that costs an order.
+
+  nk = [-tink(2) tink(1)];
+  no = [-tino(2) tino(1)];
+  X = (x - v(1))*tink(1) + (y - v(2))*tink(2);
+  Y = (x - v(1))*nk(1) + (y - v(2))*nk(2);
+
+  if (kapk == 0)
+    xi = -X;
+  else
+    % The angle is swept about the centre of curvature at v + nk/kapk, so
+    % both arguments of atan2 carry the sign of kapk: the arc may bend
+    % either way against nk, and it does -- reflecting one half reverses
+    % its curvature, and an arc's two ends see opposite signs because the
+    % inward tangent runs the other way.
+    sg = sign(kapk);
+    xi = -atan2(sg*X, sg*(1/kapk - Y))/kapk;
+  end
+
+  if (kapo == 0)
+    along = xi;
+    across = zeros(size(xi));
+  else
+    z = kapo*xi;
+    along = sin(z)/kapo;
+    % 1 - cos z, written so that it stays accurate for small z
+    across = 2*sin(z/2).^2/kapo;
+  end
+  qx = v(1) + along*tino(1) + across*no(1);
+  qy = v(2) + along*tino(2) + across*no(2);
+end
+
+
+function kap = frame_curvature(t, dir, yflip, a, b)
+%FRAME_CURVATURE  exact curvature at a cut point, in tube_map's frame
+%   tube_map measures the bending towards rot90 of the tangent pointing
+%   INTO the arc.  On the ellipse the centre of curvature is to the left of
+%   the direction of increasing t, so the sign is dir -- which way the
+%   inward tangent runs against t -- times yflip, a reflection swapping
+%   left for right.
+
+  kap = yflip*dir*a*b/(a^2*sin(t)^2 + b^2*cos(t)^2)^1.5;
+end
+
+
+function kap = cp_curvature(s, v, tin)
+%CP_CURVATURE  curvature at an arc end, from the cp queries d_k2 makes
+%   cpbar = cp(2*cp-x) and cp2bar = cp(3*cp-2*x) are points OF the arc, at
+%   arclength about a and 2a from the end for a node sitting a past it.
+%   Written in the frame (tin, rot90(tin)) based at v the arc is
+%   Y = kappa*X^2/2 + O(X^3), so least squares on that one-parameter model
+%   over every reflected point of every clamped row gives
+%
+%     kappa = 2*sum(X^2*Y)/sum(X^4),
+%
+%   weighting the far points, where the signal is largest and a frame error
+%   hurts least.  A frame tilted by dtheta puts -dtheta*X into Y, so this
+%   inherits an O(dtheta/X) = O(dx) error from a d_k2 tangent -- exactly
+%   the accuracy the glue asks for.  The sign comes out of the fit, so no
+%   orientation bookkeeping is needed here.
+
+  n = [-tin(2) tin(1)];
+
+  tol = 100*eps(max(1, max(abs(v))));
+  m = (abs(s.cpxout - v(1)) <= tol) & (abs(s.cpyout - v(2)) <= tol);
+  x = s.xout(m);  y = s.yout(m);
+  cx = s.cpxout(m);  cy = s.cpyout(m);
+  if isempty(x)
+    error('no grid points have this cut point as their closest point');
+  end
+
+  [b1x, b1y] = s.cpf(2*cx - x, 2*cy - y);
+  [b2x, b2y] = s.cpf(3*cx - 2*x, 3*cy - 2*y);
+  P = [b1x - v(1), b1y - v(2); b2x - v(1), b2y - v(2)];
+  X = P*tin.';
+  Y = P*n.';
+  den = sum(X.^4);
+  if (den <= 0)
+    error('the reflected closest points at this cut point are degenerate');
+  end
+  kap = 2*sum(X.^2.*Y)/den;
+end
+
+
+function out = icpm_solve(br, gl, x1d, y1d, p, a, b, cen, ufun, ffun)
 %ICPM_SOLVE  assemble and solve u - laplacian_S u = f
 %   br is one branch (the uncut ellipse, the exact-iCPM baseline) or two
-%   (the glued halves).  With two branches, the outer-band rows sitting
-%   at a cut point are rotated about it by theta(k,j) -- k the branch, j
-%   the cut point -- and then extended by interpolating on the other
-%   branch.  Returns the solution split by branch in out.ubr, which is
-%   what the two halves are compared through, and the surface L_inf error
-%   in out.errsurf.
+%   (the glued halves).  With two branches, the outer-band rows sitting at
+%   a cut point are sent across the cut by gl -- a rigid rotation about the
+%   cut point, or the osculating-circle map of tube_map -- then projected
+%   onto the other arc and interpolated there, which replaces their
+%   own-branch extension row.  Returns the solution split by branch in
+%   out.ubr, which is what the two halves are compared through, and the
+%   surface L_inf error in out.errsurf.
+%
+%   ts is the parameter each row stands for: its own closest point where
+%   nothing is glued, and where the glue sent it otherwise.  The
+%   right-hand side is read at ts, so the equation at a glued row is the
+%   equation at the point that row's value belongs to.
 
   nb = numel(br);
   out.nclamp = 0;
 
   Eb = cell(nb, nb);
+  ts = cell(nb, 1);
   for i = 1:nb
     for j = 1:nb
       if (i == j)
@@ -945,6 +1219,7 @@ function out = icpm_solve(br, theta, x1d, y1d, p, a, b, cen, ufun, ffun)
         Eb{i,j} = sparse(br{i}.nout, br{j}.nin);
       end
     end
+    ts{i} = br{i}.geo.parfun(br{i}.cpxout, br{i}.cpyout);
   end
 
   for k = 1:(nb - 1)*2      % nothing to route when there is one branch
@@ -953,18 +1228,39 @@ function out = icpm_solve(br, theta, x1d, y1d, p, a, b, cen, ufun, ffun)
     if isempty(rows)
       error('no rows to route across the cut on branch %d', k);
     end
-    th = theta(k, br{k}.vid(rows)).';
+    vids = br{k}.vid(rows);
     x0 = br{k}.cpxout(rows);        % the cut point itself
     y0 = br{k}.cpyout(rows);
-    ddx = br{k}.xout(rows) - x0;
-    ddy = br{k}.yout(rows) - y0;
-    xr = x0 + cos(th).*ddx - sin(th).*ddy;
-    yr = y0 + sin(th).*ddx + cos(th).*ddy;
+    xq = br{k}.xout(rows);
+    yq = br{k}.yout(rows);
+    xr = zeros(size(rows));
+    yr = zeros(size(rows));
+    switch (gl.type)
+      case 'rot'
+        th = gl.theta(k, vids).';
+        ddx = xq - x0;
+        ddy = yq - y0;
+        xr = x0 + cos(th).*ddx - sin(th).*ddy;
+        yr = y0 + sin(th).*ddx + cos(th).*ddy;
+      case 'tube'
+        for m = 1:2
+          sel = (vids == m);
+          if ~any(sel)
+            continue;
+          end
+          i1 = find(sel, 1);
+          [xr(sel), yr(sel)] = ...
+              tube_map(xq(sel), yq(sel), [x0(i1) y0(i1)], ...
+                       gl.tin{k,m}, gl.kap(k,m), gl.tin{o,m}, gl.kap(o,m));
+        end
+      otherwise
+        error('unknown glue %s', gl.type);
+    end
 
-    % A wrong rotation can push a row back across the normal line, and
-    % its closest point on the other half is then clamped to the cut
-    % point again.  That is the method doing what it does with a wrong
-    % angle, not a failure: it is counted, not rejected.
+    % A wrong glue can push a row back across the normal line, and its
+    % closest point on the other half is then clamped to the cut point
+    % again.  That is the method doing what it does with a wrong glue, not
+    % a failure: it is counted, not rejected.
     [cpxr, cpyr, ~, bdyr] = br{o}.cpf(xr, yr);
     out.nclamp = out.nclamp + sum(bdyr ~= 0);
     [Ei, Ej, Es] = interp2_matrix(x1d, y1d, cpxr, cpyr, p);
@@ -977,6 +1273,8 @@ function out = icpm_solve(br, theta, x1d, y1d, p, a, b, cen, ufun, ffun)
     Ekk = Eb{k,k};
     Ekk(rows,:) = 0;
     Eb{k,k} = Ekk;
+    % and they stand for u where the glue sent them
+    ts{k}(rows) = br{o}.geo.parfun(cpxr, cpyr);
   end
   if (nb == 2)
     Eblk = [Eb{1,1} Eb{1,2}; Eb{2,1} Eb{2,2}];
@@ -998,8 +1296,7 @@ function out = icpm_solve(br, theta, x1d, y1d, p, a, b, cen, ufun, ffun)
   rhs = zeros(n, 1);
   off = 0;
   for k = 1:nb
-    t = br{k}.geo.parfun(br{k}.cpxin, br{k}.cpyin);
-    rhs(off + (1:br{k}.nin)) = ffun(t);
+    rhs(off + (1:br{k}.nin)) = ffun(br{k}.R*ts{k});
     off = off + br{k}.nin;
   end
   u = (speye(n) - M) \ rhs;
@@ -1221,10 +1518,11 @@ function plotconv(hvals, err, rate, labels, ylab)
 %   glue scheme.
 
   hold on;
-  markers = {'o', 's', 'd', '^'};
-  colors = [0 0 0; 0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19];
+  markers = {'o', 's', 'd', '^', 'v', '>'};
+  colors = [0 0 0; 0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19; ...
+            0.49 0.18 0.56; 0.30 0.75 0.93];
   n = size(err, 1);
-  off = 4 - n;      % three curves means no baseline, so skip the black
+  off = numel(labels) - n;   % the baseline is row one when it is there
   for iv = 1:n
     % the exact rotation lands on the uncut baseline to plotting accuracy
     % at a normal cut, so the baseline is drawn heavy enough to still be
@@ -1255,10 +1553,11 @@ function plotgaps(hvals, data, rates, varlabels, metriclabels)
 %   compares schemes; reading across compares what is being measured.
 
   hold on;
-  markers = {'s', 'd', '^'};
+  markers = {'s', 'd', '^', 'v', '>'};
   styles = {'-', '--', '-.'};
   widths = [1.5 1.2 1.2];
-  colors = [0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19];
+  colors = [0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19; ...
+            0.49 0.18 0.56; 0.30 0.75 0.93];
   top = 0;
   for im = 1:length(data)
     for iv = 1:size(data{im}, 1)
