@@ -44,6 +44,12 @@ def linear_solve(matvec, b, *, method="auto", tol=1e-12, atol=0.0, restart=60,
       ``gmres``  matrix-free restarted GMRES.  A is nonsymmetric (``E`` is), so
                  CG is not an option.
       ``auto``   dense below ``dense_limit`` unknowns, GMRES above.
+
+    The default ``dense_limit`` is conservative on purpose: dense LU cannot fail
+    to converge, which is what you want from the path the tests compare against.
+    It is not the fast path -- on a 2D band of ~1000 unknowns GMRES is around 6x
+    quicker per value-and-gradient, and agrees to every printed digit -- so pass
+    ``method="gmres"`` explicitly once the gradients have been checked.
     """
     n = b.shape[0]
     if method == "auto":

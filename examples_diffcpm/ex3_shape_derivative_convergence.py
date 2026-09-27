@@ -122,16 +122,26 @@ def part2_grid_alignment():
     print("=" * 72)
     J, grid, pattern = make_objective(dx)
     gJ = jax.jit(jax.grad(J))
-    print("%-10s %-14s %-12s %-8s" % ("R", "dJ_h/dR", "error", "band ok"))
+    print("%-9s %-14s %-12s %-7s %s"
+          % ("R", "dJ_h/dR", "error", "interp", "clearance"))
     for R in np.linspace(1.0, 1.0 + 1.2 * dx, 13):
         viol = pattern.violations(sphere_cp(R, jnp.asarray(grid.xg)))
-        print("%-10.5f %-14.9f %+.3e   %s"
+        clear = grid.clearance(lambda pts, R=R: np.abs(np.linalg.norm(pts, axis=1) - R))
+        print("%-9.5f %-14.9f %+.3e  %-7s %.1f"
               % (R, float(gJ(R)), float(gJ(R)) - exact_dJ(R),
-                 "yes" if viol == 0 else "NO (%d)" % viol))
-    print("\nThe error grows smoothly as the surface drifts away from the radius")
-    print("the band was built for, then breaks down entirely once the surface")
-    print("leaves the band -- the last rows flag that explicitly.  Within the")
-    print("band the variation is the grid-alignment effect.")
+                 "ok" if viol == 0 else "%d bad" % viol, clear))
+    print("\nTwo separate things go wrong as the surface drifts away from the")
+    print("radius the band was built for, and only the second one is loud.")
+    print("The 'interp' column -- InterpPattern.violations, the check it is")
+    print("natural to write -- stays clean long after the answer has gone bad.")
+    print("The 'clearance' column is the honest one: it reports the largest")
+    print("fraction of the Ruuth-Merriman radius the band still covers around")
+    print("the *current* surface.  It drops below 1 exactly where the error")
+    print("starts to grow by an order of magnitude, because at that point the")
+    print("Dirichlet condition at the outer edge of the band -- where the")
+    print("Laplacian drops out-of-band neighbours -- has come within reach of")
+    print("the surface.  Interpolation is the last thing to fail, not the first.")
+    print("Below that, at small drift, the residual variation is grid alignment.")
 
 
 def part3_offset_average(nshift=8):

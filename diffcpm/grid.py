@@ -70,6 +70,17 @@ class BandedGrid:
         return np.array([v[0] for v in self.x1d])
 
     @property
+    def required_bw(self):
+        """The Ruuth-Merriman radius this band *must* have, in units of dx.
+
+        Distinct from ``bw``, which is what the band actually has: ``bw`` may be
+        larger by ``extra_bw`` slack, deliberately, so a moving surface stays
+        covered.  Clearance is measured against this requirement, not against the
+        slack.
+        """
+        return rm_bandwidth(self.dim, self.p, self.stenrad)
+
+    @property
     def sub(self):
         """(n, dim) integer subscripts of the band points."""
         return np.stack(np.unravel_index(self.band, self.shape), axis=1)
@@ -78,6 +89,55 @@ class BandedGrid:
     def xg(self):
         """(n, dim) coordinates of the band points."""
         return self.relpt + self.sub * self.dx
+
+    def uncovered_near_surface(self, dist_fun, safety=1.0, chunk=200000):
+        """Grid points within the band radius of a surface but outside the band.
+
+        ``InterpPattern.violations`` checks only that the interpolation stencils
+        of the *band* points are inside the band.  That is necessary but not
+        sufficient for a surface that has moved: the finite-difference Laplacian
+        drops out-of-band neighbours, imposing a Dirichlet condition at the outer
+        edge of the band, and the surface needs clearance from that edge, not
+        merely from the point where interpolation fails.
+
+        This is the sufficient check.  It asks the question the band was built to
+        answer -- "is every grid point within the Ruuth-Merriman radius of the
+        surface in the band?" -- for a *new* surface, given as a distance
+        function.  A nonzero count means results near the surface are
+        contaminated by the artificial boundary, even if nothing has failed
+        outright.  ``safety`` below 1 asks for less clearance than the
+        Ruuth-Merriman radius.
+
+        The radius used is ``required_bw``, not ``bw``: a band widened by
+        ``extra_bw`` has slack to spend on surface motion, and measuring against
+        its own inflated radius would spend the slack on nothing.
+        """
+        radius = safety * self.required_bw * float(np.max(self.dx))
+        total = int(np.prod(self.shape))
+        missing = 0
+        for start in range(0, total, chunk):
+            stop = min(start + chunk, total)
+            idx = np.arange(start, stop)
+            sub = np.stack(np.unravel_index(idx, self.shape), axis=1)
+            pts = self.relpt + sub * self.dx
+            near = np.asarray(dist_fun(pts)) <= radius
+            if np.any(near):
+                missing += int(np.sum(self.inv[idx[near]] < 0))
+        return missing
+
+    def clearance(self, dist_fun, safety_grid=None, chunk=200000):
+        """Largest ``safety`` in ``uncovered_near_surface`` that still returns 0.
+
+        Reported in units of the Ruuth-Merriman radius: 1.0 or more means the
+        band gives the surface full clearance, and smaller values say how much is
+        missing.  Returns 0.0 if even a tenth of the radius is not covered.
+        """
+        grid = (1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1) \
+            if safety_grid is None else tuple(safety_grid)
+        for s in sorted(grid, reverse=True):
+            if self.uncovered_near_surface(dist_fun, safety=s, chunk=chunk) == 0:
+                return float(s)
+        return 0.0
 
     def neighbour_band_index(self, offset):
         """Band index of each band point shifted by integer ``offset``.

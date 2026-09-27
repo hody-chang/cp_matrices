@@ -141,8 +141,18 @@ are assertions in that file, not claims:
 * `dJ/d(shape)` matches central differences for a circle radius, ellipse axes
   (through the implicit-solver/IFT path), torus radii, and a 3D sphere radius.
 * `dJ/dphi` matches central differences in random SIREN weight-space directions.
-* The discrete shape derivative converges, under grid refinement, to the exact
-  continuous shape derivative of `J(R) = 1/2 int_Gamma u^2 ds` on a circle.
+* The discrete objective converges to `J(R) = 1/2 int_Gamma u^2 ds` on a circle at
+  second order, and the discrete shape derivative converges to the exact
+  continuous shape derivative — but not at second order, see below.
+* The `clearance` diagnostic fires before `violations` does, and the gradient
+  degrades more than two orders of magnitude faster than the objective when it
+  fires.
+* `diagsplit` and `lapsharp` coincide to machine precision on an *anisotropic*
+  grid too, since `gamma` is taken from the assembled `L` rather than a formula;
+  the unstabilized product `L E` has an eigenvalue with positive real part on the
+  same grid.
+* Fourth-order differences are rejected on a band built for `stenrad = 1`, and
+  beat second order when given a band built for `stenrad = 2`.
 
 The `diagsplit` and `lapsharp` stabilizations agree to machine precision for a
 second-order Laplacian on an equal-spacing grid, since there
@@ -154,6 +164,24 @@ why neither is optional.
 
 These are real, and the first two are where the research content of the proposal
 actually lies.
+
+**The shape derivative converges more slowly than the objective.** Measured
+against the closed form on a circle, `J_h -> J` at a clean second order, but
+`dJ_h/dR -> dJ/dR` non-monotonically and at roughly first order on average: 
+refining the grid can make the derivative error *worse*. The cause is grid
+alignment — the CPM discretization error depends on where the surface sits
+relative to the grid lines, and differentiating in a shape direction
+differentiates that dependence along with the physics. Averaging `dJ_h/dR` over
+sub-cell grid offsets recovers the second-order rate, while the spread across
+offsets is as large as the mean error, which confirms the diagnosis: an
+oscillation in `R/h` with near-zero mean on top of a clean `O(h^2)` trend.
+`examples_diffcpm/ex3_shape_derivative_convergence.py` is that experiment.
+
+Note what this is *not*: the adjoint is the exact derivative of the discrete
+objective, checked to 1e-11 against the hand-assembled formula. It is the
+discrete objective whose error is grid-aligned. So this is a statement about the
+discretization, and an argument for tapered or blended stencils, rather than a
+reason to distrust the layer.
 
 **Moving bands / stencil crossings.** The band and the stencil *choice* are
 computed under `stop_gradient`. As the surface moves, closest points cross
@@ -175,10 +203,30 @@ step is small enough that the interval contains no crossing. Consequences:
   implemented here.
 
 **The band is fixed, and sized for the initial shape.** `extra_bw` widens it so a
-moving surface stays inside. `InterpPattern.violations` and
-`operators.laplacian_dropped` report when that fails; nothing detects it
-automatically inside `jit`, where out-of-band stencil entries are silently
-zero-weighted. Check `violations == 0` explicitly, as the examples do.
+moving surface stays inside. Nothing detects a breach automatically inside `jit`,
+where out-of-band stencil entries are silently zero-weighted, so check
+explicitly, as the examples do — but check the *right* thing, because the two
+ways a band goes stale are not simultaneous:
+
+* `InterpPattern.violations(cp)` asks whether the interpolation stencils of the
+  band points still land in the band. This is the check it is natural to write,
+  and it is the **last** thing to fail.
+* `BandedGrid.clearance(dist_fun)` asks the question the band was built to
+  answer — is every grid point within the Ruuth–Merriman radius of the *current*
+  surface in the band? — and reports the largest fraction of that radius still
+  covered. This is the **first** thing to fail, and the one that matters.
+
+On a band built for the unit circle at `dx = 0.1`, drifting to `R = 1.1` leaves
+`violations` at zero while clearance has dropped to 0.8, and at that point the
+outer band edge (where the Laplacian drops neighbours, imposing an artificial
+Dirichlet condition) has come within reach of the surface. What that costs is
+striking: the objective `J_h` degrades by a factor of about 2, while its shape
+derivative loses more than two orders of magnitude. The gradient is far more
+sensitive to band staleness than the solution is, which is exactly the wrong way
+round for an optimizer that is moving the shape.
+`tests/test_diffcpm.py::test_band_clearance_predicts_degradation` pins this down
+and `examples_diffcpm/ex3_*.py` shows the sweep. `operators.laplacian_dropped`
+reports how many neighbours are being dropped at all.
 
 **Band-edge boundary condition.** Out-of-band finite-difference neighbours are
 dropped, imposing a Dirichlet condition at the outer edge of the band. This

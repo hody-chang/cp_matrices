@@ -139,6 +139,62 @@ def test_order4_laplacian():
     assert errs[4] < errs[2], errs
 
 
+def test_band_clearance_predicts_degradation():
+    """The clearance diagnostic fires before interpolation does, and it is right.
+
+    A band built for one shape does not stay valid as the surface moves, and the
+    two ways it fails are not simultaneous.  InterpPattern.violations detects the
+    late failure (a stencil leaving the band); BandedGrid.clearance detects the
+    early one (the band's Dirichlet outer edge coming within the Ruuth-Merriman
+    radius of the surface), which is where accuracy actually starts to go.  This
+    test pins down that ordering and checks the diagnostic against the error it
+    is supposed to predict.
+    """
+    dx = 0.1
+    k = 3
+    grid = circle_setup(dx=dx, R=1.0, half=1.8)
+    pat = InterpPattern(grid)
+    J = _shape_objective(grid, pat, lambda t, xs: sphere_cp(t[0], xs), m=256, k=k)
+    gJ = jax.jit(jax.grad(lambda t: J(t)))
+
+    def dist_fun(R):
+        return lambda pts: np.abs(np.linalg.norm(pts, axis=1) - R)
+
+    def deriv_error(R):
+        g = float(gJ(jnp.array([R]))[0])
+        return abs(g - continuous_shape_derivative(R, k))
+
+    def value_error(R):
+        q = 1.0 + k**2 / R**2
+        return abs(float(J(jnp.array([R]))) - 0.5 * np.pi * R / q**2)
+
+    # at the design radius: full clearance
+    assert grid.uncovered_near_surface(dist_fun(1.0)) == 0
+    assert grid.clearance(dist_fun(1.0)) >= 1.0
+    d_ok, v_ok = deriv_error(1.0), value_error(1.0)
+
+    # drifted far enough to lose clearance, while interpolation is still fine --
+    # this is the ordering the diagnostic exists to expose
+    R_bad = 1.1
+    assert pat.violations(sphere_cp(R_bad, jnp.asarray(grid.xg))) == 0
+    assert grid.uncovered_near_surface(dist_fun(R_bad)) > 0
+    assert grid.clearance(dist_fun(R_bad)) < 1.0
+
+    # and it is the *gradient* that pays for it, far more than the value: the
+    # objective degrades by a modest factor while its shape derivative loses
+    # more than two orders of magnitude.
+    d_bad, v_bad = deriv_error(R_bad), value_error(R_bad)
+    assert d_bad / d_ok > 100.0, (d_ok, d_bad)
+    assert v_bad / v_ok < 20.0, (v_ok, v_bad)
+    assert (d_bad / d_ok) > 10.0 * (v_bad / v_ok), (d_ok, d_bad, v_ok, v_bad)
+
+    # widening the band restores the clearance
+    wide = band_from_cp([make_grid1d(-1.8, 1.8, dx)] * 2,
+                        lambda p: np.asarray(sphere_cp(1.0, jnp.asarray(p))),
+                        p=3, stenrad=1, extra_bw=3.0)
+    assert wide.clearance(dist_fun(R_bad)) >= 1.0
+
+
 def test_forward_solve_second_order():
     """Near-surface error of the CPM solve halves twice per grid refinement."""
     errs = []

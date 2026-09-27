@@ -121,6 +121,13 @@ def main():
             print("   (steps %5d) Newton did not converge: |f| %.1e, sin %.1e"
                   % (steps, fmax, sinmax))
         viol = pattern.violations(cp_s)
+        clear = grid.clearance(
+            lambda pts: np.linalg.norm(
+                np.asarray(cp_level_set(siren_apply, params, jnp.asarray(pts))) - pts,
+                axis=1))
+        if clear < 1.0:
+            print("   (steps %5d) band clearance only %.1f of the RM radius"
+                  % (steps, clear))
         geo = float(jnp.max(jnp.linalg.norm(cp_s - cp_exact, axis=1)))
         gs = jax.vmap(jax.grad(siren_apply, argnums=1), in_axes=(None, 0))(params, cp_s)
         gradef = float(jnp.max(jnp.abs(jnp.linalg.norm(gs, axis=1) - 1.0)))

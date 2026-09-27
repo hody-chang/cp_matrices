@@ -101,21 +101,25 @@ def main():
               % (ana, fd, rel, e))
 
     print("\nrecovery vs regularization weight")
-    print("   %-10s %-12s %-12s %s" % ("reg", "J", "||dtheta||", "per-mode error"))
+    print("   %-9s %-11s %-11s %s"
+          % ("reg", "J", "||dtheta||", "per-mode error (modes 1..%d)" % NMODES))
     for reg in (0.0, 1e-8, 1e-6, 1e-4, 1e-2):
         theta_hat, res = lbfgs(lambda t: objective(t, reg), jnp.zeros(NMODES),
                                maxiter=500)
         err = np.asarray(theta_hat) - THETA_TRUE
-        print("   %-10.0e %-12.4e %-12.4e %s"
+        print("   %-9.0e %-11.4e %-11.4e %s"
               % (reg, res.fun, np.linalg.norm(err),
-                 np.array2string(err, precision=4, suppress_small=True)))
+                 " ".join("%+8.5f" % v for v in err)))
 
     print("\nWith %d sensors and %d unknowns the problem is only mildly"
           % (NSENSOR, NMODES))
     print("overdetermined, and the high modes are damped by 1/(1+k^2) before they")
     print("reach the data -- so they are the ones the noise destroys first.  That")
-    print("is identifiability, not an optimizer failure: note that reg = 0 still")
-    print("drives J to the noise floor while getting the last modes wrong.")
+    print("is identifiability, not an optimizer failure: reg = 0 drives J to the")
+    print("noise floor while still getting the last modes wrong, and a modest")
+    print("weight reduces the coefficient error even though it *raises* J.  The")
+    print("best-fitting solution is not the most accurate one, which is the whole")
+    print("reason regularization has to be part of the formulation.")
 
 
 if __name__ == "__main__":

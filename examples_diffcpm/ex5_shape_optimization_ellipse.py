@@ -40,7 +40,7 @@ from diffcpm.surfaces import ellipsoid_cp, sphere_cp
 
 AXES_TRUE = np.array([1.25, 0.80])
 AXES_INIT = np.array([1.00, 1.00])
-DX = 0.06
+DX = 0.08
 NSENSOR = 40
 NOISE = 1e-3
 
@@ -71,7 +71,7 @@ def part_a():
         ("ellipse 1.25x0.8", AXES_TRUE,
          lambda g: ellipsoid_cp(jnp.asarray(AXES_TRUE), jnp.asarray(g.xg))),
     ):
-        x1d = [make_grid1d(-1.9, 1.9, 0.05)] * 2
+        x1d = [make_grid1d(-1.9, 1.9, 0.06)] * 2
         cpn = (lambda a: (lambda p: np.asarray(ellipsoid_cp(jnp.asarray(a),
                                                             jnp.asarray(p)))))(axes)
         grid = band_from_cp(x1d, cpn, p=3, stenrad=1)
@@ -100,17 +100,31 @@ def part_b():
     x1d = [make_grid1d(-1.9, 1.9, DX)] * 2
     # Band built for the *initial* circle, widened so every shape the optimizer
     # visits stays inside it.
+    # extra_bw has to cover the surface motion: the axes move by up to 0.25,
+    # which is about 3.1 cells at this dx, so 4.5 leaves margin.  The clearance
+    # assertions below are what actually check it.
     grid = band_from_cp(x1d, lambda p: np.asarray(sphere_cp(1.0, jnp.asarray(p))),
-                        p=3, stenrad=1, extra_bw=6.0)
+                        p=3, stenrad=1, extra_bw=4.5)
     pattern = InterpPattern(grid)
     observer = Observer(grid)
     print("grid %s, band %d points, dx %.3f, band radius %.2f cells"
           % (grid.shape, grid.n, DX, grid.bw))
 
     xg = jnp.asarray(grid.xg)
+    def cp_dist(axes):
+        return lambda pts: np.linalg.norm(
+            np.asarray(ellipsoid_cp(jnp.asarray(axes), jnp.asarray(pts))) - pts, axis=1)
+
     cp_true = ellipsoid_cp(jnp.asarray(AXES_TRUE), xg)
     assert pattern.violations(cp_true) == 0, "true shape outside the band"
     assert pattern.violations(ellipsoid_cp(jnp.asarray(AXES_INIT), xg)) == 0
+    # The sufficient check: full Ruuth-Merriman clearance for both endpoints of
+    # the optimization, so the band's artificial Dirichlet edge never reaches the
+    # surface.  InterpPattern.violations alone would not catch that (see ex3).
+    for name, axes in (("initial", AXES_INIT), ("true", AXES_TRUE)):
+        c = grid.clearance(cp_dist(axes))
+        print("   band clearance at the %s shape: %.1f of the RM radius" % (name, c))
+        assert c >= 1.0, "widen extra_bw: %s shape has clearance %.1f" % (name, c)
 
     # Sensors sit at fixed ambient points on the true surface, as physical
     # sensors would.  They do not move with the trial shape.
@@ -126,7 +140,11 @@ def part_b():
         # An ambient source, so the geometry enters through where the surface
         # samples it as well as through the operator.
         b = 1.0 + cp[:, 0] + 0.5 * cp[:, 1] ** 2
-        return solve_operator(op, b, method="dense")
+        # Matrix-free GMRES rather than dense LU: at this size it is ~6x faster
+        # per value-and-gradient and agrees with dense to every printed digit
+        # (tests/test_diffcpm.py::test_gmres_and_dense_agree_including_gradients).
+        return solve_operator(op, b, method="gmres", tol=1e-13, maxiter=1500,
+                              restart=250)
 
     data = observer(forward(jnp.asarray(AXES_TRUE)), sensors)
     data = data + NOISE * jnp.asarray(rng.standard_normal(NSENSOR))
@@ -143,7 +161,7 @@ def part_b():
               % (ana, fd, rel, e))
 
     trace = []
-    axes_hat, res = lbfgs(objective, jnp.asarray(AXES_INIT), maxiter=120,
+    axes_hat, res = lbfgs(objective, jnp.asarray(AXES_INIT), maxiter=80,
                           callback=lambda z: trace.append(np.array(z, copy=True)))
     print("\n   %-6s %-10s %-10s %-12s" % ("iter", "a", "b", "J"))
     for i, z in enumerate(trace[:: max(1, len(trace) // 8)]):
@@ -155,8 +173,8 @@ def part_b():
     print("\n   axis error  %+.2e %+.2e   (noise %.0e, dx %.2f)"
           % (err[0], err[1], NOISE, DX))
     print("   L-BFGS iterations %d, function evaluations %d" % (res.nit, res.nfev))
-    print("   band still valid at the optimum: %s"
-          % ("yes" if pattern.violations(ellipsoid_cp(axes_hat, xg)) == 0 else "NO"))
+    print("   band clearance at the optimum: %.1f of the RM radius"
+          % grid.clearance(cp_dist(np.asarray(axes_hat))))
 
     print("\nThe recovered axes land within about the discretization error of the")
     print("truth.  Note what limits the accuracy: not the optimizer, which drives")
