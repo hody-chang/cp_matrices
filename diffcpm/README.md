@@ -30,10 +30,59 @@ of one extra linear solve, via the adjoint, with no unrolling.
 
 A neural implicit surface changes shape during optimization. Mesh FEM would need
 marching cubes (not differentiable, changes topology) then remeshing, each step.
-CPM needs only closest-point queries on a fixed Cartesian grid: the band and the
-sparsity pattern stay fixed, the operator is assembled from interpolation
-weights that are *polynomials* in the closest point, and the geometry gradient
-therefore falls out of the same autodiff pass as everything else.
+CPM needs only closest-point queries on a fixed Cartesian grid: the band stays
+fixed, the operator is assembled from interpolation weights that are
+*polynomials* in the closest point, and the geometry gradient therefore falls out
+of the same autodiff pass as everything else.
+
+"Fixed sparsity" is worth stating precisely, since it is what makes the whole
+thing traceable. The *shape* of the pattern is fixed — every row has exactly
+`(p+1)^dim` interpolation entries and `1 + 2*dim*stenrad` difference entries, set
+by the band and the stencil, not by the geometry. Which columns those entries
+land in does move as the surface moves, but that is integer arithmetic on a
+gather, so it costs nothing at trace time and carries no gradient. Nothing is
+reallocated, re-factorized or re-banded when the shape changes.
+
+## Getting started
+
+There is no install step: put the repository root on the path and import.
+
+```bash
+pip install -r diffcpm/requirements.txt
+export PYTHONPATH=/path/to/cp_matrices
+python diffcpm/tests/test_diffcpm.py                     # 19 tests, ~5 min
+python examples_diffcpm/ex1_source_recovery_circle.py
+```
+
+A minimal end-to-end solve, geometry included:
+
+```python
+import jax, jax.numpy as jnp, numpy as np
+jax.config.update("jax_enable_x64", True)          # required, everywhere
+from diffcpm import (band_from_cp, make_grid1d, InterpPattern,
+                     build_operator, solve_operator)
+from diffcpm.surfaces import sphere_cp
+
+dx = 0.05
+x1d = [make_grid1d(-1.6, 1.6, dx)] * 2
+grid = band_from_cp(x1d, lambda p: np.asarray(sphere_cp(1.0, jnp.asarray(p))),
+                    p=3, stenrad=1)
+pattern = InterpPattern(grid)                      # hoist the static work
+
+def solve(R):                                      # (-Delta_s + 1) u = cos(3 theta)
+    cp = sphere_cp(R, jnp.asarray(grid.xg))        # closest points, differentiable
+    op = build_operator(grid, cp, alpha=-1.0, c=1.0, pattern=pattern)
+    b = jnp.cos(3 * jnp.arctan2(cp[:, 1], cp[:, 0]))
+    return solve_operator(op, b, method="dense")
+
+u = solve(1.0)                                     # forward
+g = jax.grad(lambda R: jnp.sum(solve(R) ** 2))(1.0)  # d/dR through the solve
+```
+
+Swap `sphere_cp` for `diffcpm.sdf.cp_level_set(siren_apply, params, grid.xg)` and
+`jax.grad` with respect to `params` works the same way. Two things to check
+before trusting a result: `pattern.violations(cp) == 0` and
+`grid.clearance(dist_fun) == 1.0` — see the limitations below for why both.
 
 ## Layout
 
