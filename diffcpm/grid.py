@@ -1,0 +1,156 @@
+"""Banded Cartesian grids for the closest point method.
+
+The band is *static structure*: linear indices into a uniform Cartesian grid,
+plus the inverse map from grid index to band index.  It is built once from a
+nominal geometry and then held fixed while the geometry moves during an
+optimization.  Keeping it fixed is what makes the sparsity pattern of the CPM
+operators constant, which is what lets the whole solve be traced by JAX.
+
+Conventions follow ../cp_matrices (MATLAB):
+
+  * grids are ndgrid-style tensor products of 1D vectors ``x1d[0] x x1d[1] ...``
+  * linear indices are C-order (``numpy.ravel_multi_index``) over ``shape``
+  * the band radius is the Ruuth-Merriman estimate, see ``rm_bandwidth``
+"""
+
+import dataclasses
+from math import sqrt
+
+import numpy as np
+
+
+def rm_bandwidth(dim, p, stenrad=1, safety=1.0001):
+    """Ruuth-Merriman band radius in units of dx.
+
+    Matches cp_matrices/rm_bandwidth.m:
+
+        bw = safety * sqrt((dim-1)*((p+1)/2)^2 + (stenrad + (p+1)/2)^2)
+
+    A grid point within ``bw*dx`` of the surface has the property that the
+    interpolation stencils of all its finite-difference neighbours are
+    themselves inside the band, so ``L @ E`` needs no data from outside.
+    """
+    half = (p + 1) / 2.0
+    return safety * sqrt((dim - 1) * half**2 + (stenrad + half) ** 2)
+
+
+@dataclasses.dataclass(frozen=True)
+class BandedGrid:
+    """A uniform Cartesian grid together with a fixed band of active points."""
+
+    x1d: tuple  # tuple of 1D numpy arrays, one per dimension
+    band: np.ndarray  # (n,) int64 C-order linear indices into the full grid
+    inv: np.ndarray  # (prod(shape),) int64, band index or -1
+    p: int  # interpolation degree the band was sized for
+    stenrad: int  # finite-difference stencil radius the band was sized for
+    bw: float  # band radius actually used, in units of dx
+
+    # ---- derived quantities -------------------------------------------------
+
+    @property
+    def dim(self):
+        return len(self.x1d)
+
+    @property
+    def shape(self):
+        return tuple(len(v) for v in self.x1d)
+
+    @property
+    def n(self):
+        return len(self.band)
+
+    @property
+    def dx(self):
+        """Per-dimension grid spacing, as a (dim,) array."""
+        return np.array([v[1] - v[0] for v in self.x1d])
+
+    @property
+    def relpt(self):
+        """Reference point, the grid corner corresponding to index (0,...,0)."""
+        return np.array([v[0] for v in self.x1d])
+
+    @property
+    def sub(self):
+        """(n, dim) integer subscripts of the band points."""
+        return np.stack(np.unravel_index(self.band, self.shape), axis=1)
+
+    @property
+    def xg(self):
+        """(n, dim) coordinates of the band points."""
+        return self.relpt + self.sub * self.dx
+
+    def neighbour_band_index(self, offset):
+        """Band index of each band point shifted by integer ``offset``.
+
+        Returns ``-1`` where the neighbour falls outside the band or off the
+        grid.  Used to build finite-difference matrices.
+        """
+        sub = self.sub + np.asarray(offset, dtype=np.int64)
+        shape = np.array(self.shape)
+        inside = np.all((sub >= 0) & (sub < shape), axis=1)
+        out = np.full(self.n, -1, dtype=np.int64)
+        if np.any(inside):
+            flat = np.ravel_multi_index(tuple(sub[inside].T), self.shape)
+            out[inside] = self.inv[flat]
+        return out
+
+
+def make_grid1d(lo, hi, dx):
+    """1D grid vector covering [lo, hi] with spacing (close to) dx.
+
+    The endpoint is adjusted outwards so the spacing is exactly ``dx``.
+    """
+    m = int(np.ceil((hi - lo) / dx))
+    return lo + dx * np.arange(m + 1)
+
+
+def band_from_dist(x1d, dist_fun, p=3, stenrad=1, safety=1.0001, extra_bw=0.0,
+                   chunk=200000):
+    """Build a band from a distance function evaluated on the whole grid.
+
+    ``dist_fun`` takes an (m, dim) array of points and returns (m,) distances to
+    the surface.  ``extra_bw`` widens the band (in units of dx) beyond the
+    Ruuth-Merriman estimate; use it when the geometry will move during an
+    optimization so that the moving surface stays inside a fixed band.
+    """
+    x1d = tuple(np.asarray(v, dtype=float) for v in x1d)
+    dim = len(x1d)
+    shape = tuple(len(v) for v in x1d)
+    dx = np.array([v[1] - v[0] for v in x1d])
+    relpt = np.array([v[0] for v in x1d])
+    bw = rm_bandwidth(dim, p, stenrad, safety) + extra_bw
+    radius = bw * float(np.max(dx))
+
+    total = int(np.prod(shape))
+    keep = np.zeros(total, dtype=bool)
+    for start in range(0, total, chunk):
+        stop = min(start + chunk, total)
+        idx = np.arange(start, stop)
+        sub = np.stack(np.unravel_index(idx, shape), axis=1)
+        pts = relpt + sub * dx
+        keep[start:stop] = np.asarray(dist_fun(pts)) <= radius
+
+    band = np.flatnonzero(keep).astype(np.int64)
+    if band.size == 0:
+        raise ValueError(
+            "empty band: the surface does not intersect the grid, or dx is too "
+            "coarse relative to the band radius"
+        )
+    inv = np.full(total, -1, dtype=np.int64)
+    inv[band] = np.arange(band.size, dtype=np.int64)
+    return BandedGrid(x1d=x1d, band=band, inv=inv, p=p, stenrad=stenrad, bw=bw)
+
+
+def band_from_cp(x1d, cp_fun, **kwargs):
+    """Build a band from a closest point function.
+
+    ``cp_fun`` maps (m, dim) points to (m, dim) closest points; the distance is
+    taken as ``|cp(x) - x|``.  This is the honest CPM notion of distance and
+    works for a learned SDF whose ``|grad f|`` is not 1.
+    """
+
+    def dist_fun(pts):
+        cp = np.asarray(cp_fun(pts))
+        return np.linalg.norm(cp - pts, axis=1)
+
+    return band_from_dist(x1d, dist_fun, **kwargs)

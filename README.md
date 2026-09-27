@@ -7,6 +7,18 @@ For more information and publications about the Closest Point Method, see
 http://people.maths.ox.ac.uk/macdonald/closestpoint
 
 
+# Differentiable CPM (JAX)
+
+`diffcpm/` is a Python 3 / JAX implementation of the closest point method whose
+solve is differentiable with respect to the PDE coefficients *and* the geometry,
+including the weights of a neural implicit surface. It is for PDE-constrained
+optimization and inverse problems on implicit surfaces, with no meshing step.
+Runnable experiments are in `examples_diffcpm/`. See `diffcpm/README.md` for what
+it does, what is verified, and what its limitations are. It follows the
+conventions of the MATLAB `cp_matrices/` but is otherwise independent of it, and
+of the older Python 2 code in `python/`.
+
+
 # Status
 
 This is work in process, so the usual disclaimers apply.

@@ -1,0 +1,5 @@
+# diffcpm (python 3).  Independent of the python 2 code in ../python/.
+jax>=0.4.20
+jaxlib>=0.4.20
+numpy>=1.24
+scipy>=1.10      # only for the L-BFGS-B driver in diffcpm.inverse.lbfgs
