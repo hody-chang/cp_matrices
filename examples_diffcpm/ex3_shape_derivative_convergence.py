@@ -136,12 +136,16 @@ def part2_grid_alignment():
     print("natural to write -- stays clean long after the answer has gone bad.")
     print("The 'clearance' column is the honest one: it reports the fraction")
     print("of the Ruuth-Merriman radius the band still covers around the")
-    print("*current* surface.  It drops below 1 exactly where the error")
-    print("starts to grow by an order of magnitude, because at that point the")
-    print("Dirichlet condition at the outer edge of the band -- where the")
-    print("Laplacian drops out-of-band neighbours -- has come within reach of")
-    print("the surface.  Interpolation is the last thing to fail, not the first.")
-    print("Below that, at small drift, the residual variation is grid alignment.")
+    print("*current* surface, and the error tracks it.  While clearance is at")
+    print("or near 1 the error stays at the 1e-4 level; by the time clearance")
+    print("has fallen to about 0.94 the error is an order of magnitude worse,")
+    print("and around 0.80 it is two orders worse again.  The mechanism is the")
+    print("Dirichlet condition at the outer edge of the band, where the")
+    print("Laplacian drops out-of-band neighbours: as clearance falls, that")
+    print("artificial boundary comes within reach of the surface.")
+    print("Interpolation is the last thing to fail, not the first.")
+    print("At small drift, where clearance is still 1, the residual variation")
+    print("is the grid-alignment effect from part 1.")
 
 
 def part3_offset_average(nshift=8):

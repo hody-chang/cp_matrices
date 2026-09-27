@@ -109,7 +109,7 @@ def main():
         err = np.asarray(theta_hat) - THETA_TRUE
         print("   %-9.0e %-11.4e %-11.4e %s"
               % (reg, res.fun, np.linalg.norm(err),
-                 " ".join("%+8.5f" % v for v in err)))
+                 " ".join("%+9.2e" % v for v in err)))
 
     print("\nWith %d sensors and %d unknowns the problem is only mildly"
           % (NSENSOR, NMODES))

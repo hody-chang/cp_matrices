@@ -4,11 +4,16 @@ Run directly (``python diffcpm/tests/test_diffcpm.py``) or under pytest.
 
 The tests are organised by what could actually be wrong:
 
-  operators   does the forward CPM solve converge at the expected rate
-  adjoint     does custom_linear_solve reproduce the hand-written adjoint
+  operators   are E, its transpose, L and the stabilizations what they claim to
+              be, and does the forward solve converge at the expected rate
+  geometry    does the closest point solver find the closest point, and does the
+              band still describe the surface it is being used for
+  adjoint     does custom_linear_solve reproduce the hand-written adjoint, and do
+              the dense and matrix-free paths agree
   parameter   is dJ/dtheta right (finite differences)
-  geometry    is dJ/d(shape) right, for closed-form and for learned surfaces
-  continuous  does the discrete shape derivative converge to the continuous one
+  shape       is dJ/d(shape) right, for closed-form and for learned surfaces
+  continuous  do the discrete objective and its shape derivative converge to the
+              continuous ones, and at what rate
 """
 
 import os
@@ -27,7 +32,7 @@ from diffcpm.interp import InterpPattern, apply_sparse, apply_sparse_T
 from diffcpm.inverse import Observer, check_gradient, misfit
 from diffcpm.operators import build_operator, laplacian_pattern
 from diffcpm.sdf import cp_level_set, level_set_residual_norm, siren_apply, siren_init
-from diffcpm.solve import linear_solve, solve_operator
+from diffcpm.solve import solve_operator
 from diffcpm.surfaces import (ellipsoid_cp, ellipsoid_level_set, sphere_cp,
                               sphere_level_set, torus_cp, torus_level_set)
 
