@@ -127,11 +127,14 @@ everywhere, at O(N^2) instead of O(N) for `N = p+1 <= 8`.
 
 ## What is verified
 
-`python diffcpm/tests/test_diffcpm.py` (or under pytest). All of the following
-are assertions in that file, not claims:
+`python diffcpm/tests/test_diffcpm.py` (19 tests, or run it under pytest). All
+of the following are assertions in that file, not claims:
 
 * `E` reproduces polynomials of degree `<= p` at the closest points to 1e-11, and
   `apply_sparse_T` is the exact transpose of `apply_sparse`.
+* The Newton/IFT closest point solver agrees with the closed-form sphere and
+  torus maps to ~1e-14, and its first-order residuals are at machine precision,
+  including on a level-set function with `|grad f| != 1`.
 * The forward solve of `(-Delta_s + 1)u = cos(k theta)` on a circle converges at
   second order near the surface.
 * `custom_linear_solve` reproduces the hand-assembled adjoint to 1e-11.
@@ -154,11 +157,46 @@ are assertions in that file, not claims:
 * Fourth-order differences are rejected on a band built for `stenrad = 1`, and
   beat second order when given a band built for `stenrad = 2`.
 
-The `diagsplit` and `lapsharp` stabilizations agree to machine precision for a
-second-order Laplacian on an equal-spacing grid, since there
-`gamma = -diag(L) = 2 dim/dx^2` makes them algebraically identical; the
-unstabilized product `L E` has a positive eigenvalue on the same grid, which is
-why neither is optional.
+## Scope: what is here and what is not
+
+The plan this was built from proposed a first experiment in three steps. Where
+they landed:
+
+1. **Analytic geometry, recover a coefficient from sparse noisy samples, check
+   the gradients against finite differences.** Done, and then some: circle and
+   sphere for the physics (`ex1`, `ex2`), circle/sphere/torus/ellipse for the
+   geometry gradients, and a closed-form shape derivative to check against
+   (`ex3`) rather than only finite differences.
+
+2. **"Swap in a SIREN-fitted bunny and repeat."** Done for the SIREN, not for the
+   bunny. `ex4` fits SIRENs of varying quality to a circle and measures the
+   exchange rate between the surface fit and the recovered parameters, which is
+   the question the step exists to answer; the gradient path through the network
+   weights is verified in the test suite. What a bunny would add is scale, not a
+   new code path — and scale is exactly what the solver is not ready for: a
+   bunny at a useful `dx` puts tens of thousands of unknowns in the band, which
+   wants CPM multigrid rather than dense LU or unpreconditioned GMRES. The
+   triangulation is already in `../surfaces/tri/`, so this is a matter of the
+   solver, not the layer.
+
+3. **Morph one neural SDF until its first ~10 Laplace–Beltrami eigenvalues match
+   another shape's.** Partly, and the "partly" is informative. `ex5` verifies the
+   discrete surface Laplacian's spectrum against the exact
+   `lambda_j = -(2 pi j/L)^2` for a closed curve, for a circle *and* for an
+   ellipse whose closest points come from the Newton/IFT path — which is the
+   piece that had to be right. It does not then morph a shape to match a
+   spectrum, because in 2D that target is degenerate: a closed curve's
+   Laplace–Beltrami spectrum depends only on its perimeter, so "isospectral"
+   means "equal length" and the problem has a huge null space. Isospectralization
+   is only interesting from surfaces up, which puts it in the same 3D-scale
+   bucket as the bunny. `ex5` instead recovers ellipse axes from observations of
+   the PDE solution, which exercises the same geometry gradient against a target
+   that is actually identifiable.
+
+Not attempted: Gray–Scott or Turing parameter identification, optimal control of
+a surface field, and mean first passage time optimization. Those are applications
+of the layer rather than parts of it, and each needs a time-dependent or
+constrained formulation on top of what is here.
 
 ## Known limitations
 
@@ -213,11 +251,12 @@ ways a band goes stale are not simultaneous:
   and it is the **last** thing to fail.
 * `BandedGrid.clearance(dist_fun)` asks the question the band was built to
   answer — is every grid point within the Ruuth–Merriman radius of the *current*
-  surface in the band? — and reports the largest fraction of that radius still
-  covered. This is the **first** thing to fail, and the one that matters.
+  surface in the band? — and reports what fraction of that radius the band does
+  cover, as the distance from the surface to the nearest out-of-band grid point.
+  This is the **first** thing to fail, and the one that matters.
 
 On a band built for the unit circle at `dx = 0.1`, drifting to `R = 1.1` leaves
-`violations` at zero while clearance has dropped to 0.8, and at that point the
+`violations` at zero while clearance has dropped to 0.80, and at that point the
 outer band edge (where the Laplacian drops neighbours, imposing an artificial
 Dirichlet condition) has come within reach of the surface. What that costs is
 striking: the objective `J_h` degrades by a factor of about 2, while its shape

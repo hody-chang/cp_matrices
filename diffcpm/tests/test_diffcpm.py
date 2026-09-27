@@ -61,6 +61,35 @@ def circle_problem(grid, R, k=3, alpha=-1.0, c=1.0, pattern=None):
 # ---------------------------------------------------------------------------
 
 
+def test_implicit_cp_matches_closed_form():
+    """The Newton/IFT closest point solver agrees with the closed forms.
+
+    Sphere and torus have closed-form closest point maps, so the generic
+    level-set solver -- the code path a learned SDF uses -- can be checked
+    against them directly rather than only through a downstream objective.  The
+    ellipsoid is included with a deliberately non-distance level-set function
+    (|grad f| != 1) to confirm the first-order conditions, not the projection
+    iteration, are what is being solved.
+    """
+    xs = jax.random.normal(jax.random.PRNGKey(0), (60, 3)) * 0.7 \
+        + jnp.array([0.0, 0.0, 1.2])
+    got = cp_level_set(sphere_level_set, 1.3, xs)
+    assert float(jnp.max(jnp.abs(got - sphere_cp(1.3, xs)))) < 1e-14
+    fmax, sinmax = level_set_residual_norm(sphere_level_set, 1.3, xs, got)
+    assert fmax < 1e-14 and sinmax < 1e-12, (fmax, sinmax)
+
+    xt = jax.random.normal(jax.random.PRNGKey(1), (40, 3)) * 0.5 \
+        + jnp.array([1.0, 0.0, 0.0])
+    Rr = jnp.array([1.0, 0.35])
+    got = cp_level_set(torus_level_set, Rr, xt)
+    assert float(jnp.max(jnp.abs(got - torus_cp(Rr, xt)))) < 1e-13
+
+    axes = jnp.array([1.4, 1.0, 0.7])
+    got = ellipsoid_cp(axes, xs)
+    fmax, sinmax = level_set_residual_norm(ellipsoid_level_set, axes, xs, got)
+    assert fmax < 1e-14 and sinmax < 1e-12, (fmax, sinmax)
+
+
 def test_interp_reproduces_polynomials():
     """E applied to a polynomial of degree <= p is exact at the closest points."""
     grid = circle_setup(dx=0.1, p=3)

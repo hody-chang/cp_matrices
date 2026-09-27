@@ -46,7 +46,12 @@ DX = 0.08
 NMODES = 4
 NSENSOR = 16
 THETA_TRUE = np.array([0.8, -0.5, 0.35, 0.15])
-TRAIN_STEPS = (150, 400, 1200, 4000)
+# Chosen from a sweep: below ~50 steps the zero level set is not yet a closed
+# curve near the circle and the closest point Newton does not converge (the
+# guards below catch that); above ~2500 Adam at this learning rate starts to
+# oscillate and the fit gets worse, not better.  These five span a factor of ~17
+# in geometric error, which is what the slope fit at the end needs.
+TRAIN_STEPS = (50, 120, 300, 800, 2500)
 
 
 def fit_siren(steps, key):
@@ -118,15 +123,20 @@ def main():
         fmax, sinmax = level_set_residual_norm(siren_apply, params,
                                                jnp.asarray(grid.xg), cp_s)
         if fmax > 1e-8 or sinmax > 1e-8:
-            print("   (steps %5d) Newton did not converge: |f| %.1e, sin %.1e"
-                  % (steps, fmax, sinmax))
+            # The zero level set is not yet a usable surface; its "closest
+            # points" are meaningless, so record the row and move on rather than
+            # feeding nonsense into the inverse problem.
+            print("   (steps %5d) skipped: closest point Newton did not converge "
+                  "(|f| %.1e, sin angle %.1e)" % (steps, fmax, sinmax))
+            rows.append((str(steps), fit_loss, np.nan, np.nan, np.nan, np.nan, None))
+            continue
         viol = pattern.violations(cp_s)
         clear = grid.clearance(
             lambda pts: np.linalg.norm(
                 np.asarray(cp_level_set(siren_apply, params, jnp.asarray(pts))) - pts,
                 axis=1))
         if clear < 1.0:
-            print("   (steps %5d) band clearance only %.1f of the RM radius"
+            print("   (steps %5d) band clearance only %.3f of the RM radius"
                   % (steps, clear))
         geo = float(jnp.max(jnp.linalg.norm(cp_s - cp_exact, axis=1)))
         gs = jax.vmap(jax.grad(siren_apply, argnums=1), in_axes=(None, 0))(params, cp_s)
@@ -144,6 +154,11 @@ def main():
     for name, fl, geo, ge, dt, jv, _ in rows:
         print("%-8s %-11.3e %-12.3e %-14.3e %-12.3e %-11.3e"
               % (name, fl, geo, ge, dt, jv))
+    print("\ngeom err     max over the band of |cp_siren(x) - cp_exact(x)|")
+    print("| |grad f|-1 |  how far the network is from being a distance function,")
+    print("             measured on the recovered surface")
+    print("||dtheta||   error in the recovered source coefficients, whose true")
+    print("             value has norm %.3f" % np.linalg.norm(THETA_TRUE))
 
     print("\nrecovered coefficients")
     print("   true      %s" % " ".join("%+7.4f" % v for v in THETA_TRUE))

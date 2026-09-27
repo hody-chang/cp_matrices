@@ -157,18 +157,45 @@ def siren_apply(params, x):
 
 def adam(loss_and_grad, params, steps, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8,
          callback=None):
-    """Minimal Adam, so the package depends only on jax/numpy."""
-    m = jax.tree_util.tree_map(jnp.zeros_like, params)
-    v = jax.tree_util.tree_map(jnp.zeros_like, params)
-    for t in range(1, steps + 1):
+    """Minimal Adam, so the package depends only on jax/numpy.
+
+    The whole loop is put inside a single ``lax.scan`` and jitted, which matters:
+    run step by step from Python, a few thousand steps of a small network spend
+    almost all their time in dispatch rather than arithmetic.  Passing a
+    ``callback`` forces the Python loop, since a callback cannot be traced --
+    use it for monitoring, not for fitting.
+
+    Returns ``(params, final_loss)``.
+    """
+    tree_map = jax.tree_util.tree_map
+    m0 = tree_map(jnp.zeros_like, params)
+    v0 = tree_map(jnp.zeros_like, params)
+
+    def step(carry, t):
+        params, m, v = carry
         loss, g = loss_and_grad(params)
-        m = jax.tree_util.tree_map(lambda m_, g_: b1 * m_ + (1 - b1) * g_, m, g)
-        v = jax.tree_util.tree_map(lambda v_, g_: b2 * v_ + (1 - b2) * g_ * g_, v, g)
-        mh = jax.tree_util.tree_map(lambda m_: m_ / (1 - b1**t), m)
-        vh = jax.tree_util.tree_map(lambda v_: v_ / (1 - b2**t), v)
-        params = jax.tree_util.tree_map(
-            lambda p_, m_, v_: p_ - lr * m_ / (jnp.sqrt(v_) + eps), params, mh, vh
+        m = tree_map(lambda m_, g_: b1 * m_ + (1 - b1) * g_, m, g)
+        v = tree_map(lambda v_, g_: b2 * v_ + (1 - b2) * g_ * g_, v, g)
+        bc1 = 1 - b1 ** t
+        bc2 = 1 - b2 ** t
+        params = tree_map(
+            lambda p_, m_, v_: p_ - lr * (m_ / bc1) / (jnp.sqrt(v_ / bc2) + eps),
+            params, m, v,
         )
-        if callback is not None:
-            callback(t, loss, params)
-    return params, loss
+        return (params, m, v), loss
+
+    if callback is None:
+        ts = jnp.arange(1, steps + 1, dtype=jnp.float64 if jax.config.read(
+            "jax_enable_x64") else jnp.float32)
+        (params, _, _), losses = jax.jit(
+            lambda p, m, v: jax.lax.scan(step, (p, m, v), ts)
+        )(params, m0, v0)
+        return params, float(losses[-1])
+
+    carry = (params, m0, v0)
+    jstep = jax.jit(step)
+    loss = None
+    for t in range(1, steps + 1):
+        carry, loss = jstep(carry, float(t))
+        callback(t, loss, carry[0])
+    return carry[0], float(loss)

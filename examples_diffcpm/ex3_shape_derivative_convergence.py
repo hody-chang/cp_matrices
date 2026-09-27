@@ -127,16 +127,16 @@ def part2_grid_alignment():
     for R in np.linspace(1.0, 1.0 + 1.2 * dx, 13):
         viol = pattern.violations(sphere_cp(R, jnp.asarray(grid.xg)))
         clear = grid.clearance(lambda pts, R=R: np.abs(np.linalg.norm(pts, axis=1) - R))
-        print("%-9.5f %-14.9f %+.3e  %-7s %.1f"
+        print("%-9.5f %-14.9f %+.3e  %-7s %.3f"
               % (R, float(gJ(R)), float(gJ(R)) - exact_dJ(R),
                  "ok" if viol == 0 else "%d bad" % viol, clear))
     print("\nTwo separate things go wrong as the surface drifts away from the")
     print("radius the band was built for, and only the second one is loud.")
     print("The 'interp' column -- InterpPattern.violations, the check it is")
     print("natural to write -- stays clean long after the answer has gone bad.")
-    print("The 'clearance' column is the honest one: it reports the largest")
-    print("fraction of the Ruuth-Merriman radius the band still covers around")
-    print("the *current* surface.  It drops below 1 exactly where the error")
+    print("The 'clearance' column is the honest one: it reports the fraction")
+    print("of the Ruuth-Merriman radius the band still covers around the")
+    print("*current* surface.  It drops below 1 exactly where the error")
     print("starts to grow by an order of magnitude, because at that point the")
     print("Dirichlet condition at the outer edge of the band -- where the")
     print("Laplacian drops out-of-band neighbours -- has come within reach of")

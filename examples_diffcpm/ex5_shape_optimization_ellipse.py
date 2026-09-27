@@ -123,8 +123,8 @@ def part_b():
     # surface.  InterpPattern.violations alone would not catch that (see ex3).
     for name, axes in (("initial", AXES_INIT), ("true", AXES_TRUE)):
         c = grid.clearance(cp_dist(axes))
-        print("   band clearance at the %s shape: %.1f of the RM radius" % (name, c))
-        assert c >= 1.0, "widen extra_bw: %s shape has clearance %.1f" % (name, c)
+        print("   band clearance at the %s shape: %.3f of the RM radius" % (name, c))
+        assert c >= 1.0, "widen extra_bw: %s shape has clearance %.3f" % (name, c)
 
     # Sensors sit at fixed ambient points on the true surface, as physical
     # sensors would.  They do not move with the trial shape.
@@ -146,13 +146,16 @@ def part_b():
         return solve_operator(op, b, method="gmres", tol=1e-13, maxiter=1500,
                               restart=250)
 
-    data = observer(forward(jnp.asarray(AXES_TRUE)), sensors)
-    data = data + NOISE * jnp.asarray(rng.standard_normal(NSENSOR))
+    clean = observer(forward(jnp.asarray(AXES_TRUE)), sensors)
+    noisy = clean + NOISE * jnp.asarray(rng.standard_normal(NSENSOR))
     print("sensors %d, noise %.1e, signal rms %.4f"
-          % (NSENSOR, NOISE, float(jnp.sqrt(jnp.mean(data**2)))))
+          % (NSENSOR, NOISE, float(jnp.sqrt(jnp.mean(clean**2)))))
 
-    def objective(axes):
-        return misfit(observer(forward(axes), sensors), data, sigma=NOISE)
+    def make_objective(data, sigma):
+        return lambda axes: misfit(observer(forward(axes), sensors), data,
+                                   sigma=sigma)
+
+    objective = make_objective(noisy, NOISE)
 
     print("\ngradient check at the initial circle:")
     for ana, fd, rel, e in check_gradient(objective, jnp.asarray(AXES_INIT),
@@ -170,18 +173,35 @@ def part_b():
                                                res.fun))
     print("   %-6s %-10.6f %-10.6f" % ("true", AXES_TRUE[0], AXES_TRUE[1]))
     err = np.asarray(axes_hat) - AXES_TRUE
-    print("\n   axis error  %+.2e %+.2e   (noise %.0e, dx %.2f)"
-          % (err[0], err[1], NOISE, DX))
+    print("\n   axis error  %+.2e %+.2e" % (err[0], err[1]))
     print("   L-BFGS iterations %d, function evaluations %d" % (res.nit, res.nfev))
-    print("   band clearance at the optimum: %.1f of the RM radius"
+    print("   band clearance at the optimum: %.3f of the RM radius"
           % grid.clearance(cp_dist(np.asarray(axes_hat))))
+    print("   J at the optimum %.4f, expected noise floor %.1f"
+          % (res.fun, 0.5 * NSENSOR))
 
-    print("\nThe recovered axes land within about the discretization error of the")
-    print("truth.  Note what limits the accuracy: not the optimizer, which drives")
-    print("J to the noise floor, but that the shape derivative is only piecewise")
-    print("C^1 (see ex3), so a line search cannot usefully ask for more than")
-    print("about the crossing scale.  That is the moving-band issue showing up as")
-    print("a practical accuracy ceiling rather than as an outright failure.")
+    # Which of noise and discretization is the binding constraint?  Repeat with
+    # noise-free data: whatever error survives is not the data's fault.
+    axes_clean, res_clean = lbfgs(make_objective(clean, NOISE),
+                                  jnp.asarray(AXES_INIT), maxiter=80)
+    err_clean = np.asarray(axes_clean) - AXES_TRUE
+    print("\n   same recovery with noise-free data:")
+    print("   axes %.6f %.6f   axis error %+.2e %+.2e   J %.3e"
+          % (axes_clean[0], axes_clean[1], err_clean[0], err_clean[1],
+             res_clean.fun))
+
+    print("\nThe optimizer is not the limitation: J reaches its expected noise")
+    print("floor in a handful of L-BFGS iterations, from a circle that is nowhere")
+    print("near the answer.  Comparing the two runs says where the residual axis")
+    print("error comes from.  With noise-free data the objective drops far below")
+    print("the noise floor and the axes improve, so the noisy run is")
+    print("noise-limited rather than limited by the discretization -- and the")
+    print("error that survives the noise-free run is the CPM discretization")
+    print("bias, which shrinks with dx.")
+    print("\nSeparately, note the caveat from ex3: the shape derivative is only")
+    print("piecewise C^1, so there is a scale below which a line search cannot")
+    print("usefully tighten.  It is not what binds here, but it would be the")
+    print("ceiling once noise and dx were both reduced far enough.")
 
 
 if __name__ == "__main__":

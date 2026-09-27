@@ -84,7 +84,7 @@ def lagrange_weights_1d(s, N):
     return num / jnp.asarray(_nodal_denominators(N), dtype=s.dtype)
 
 
-SNAP_TOL = 1e-9  # in units of grid cells
+SNAP_TOL = 1e-9  # relative, in units of grid cells
 
 
 def base_index_and_local(x, p, relpt, dx):
@@ -103,7 +103,11 @@ def base_index_and_local(x, p, relpt, dx):
         i0 = jnp.round(t)
     else:
         tr = jnp.round(t)
-        i0 = jnp.where(jnp.abs(t - tr) < SNAP_TOL, tr, jnp.floor(t))
+        # Relative tolerance: t is of the order of the grid size, so a fixed
+        # absolute 1e-9 would stop separating rounding noise from a genuine
+        # near-integer once the grid has more than ~1e7 cells on a side.
+        tol = SNAP_TOL * jnp.maximum(1.0, jnp.abs(t))
+        i0 = jnp.where(jnp.abs(t - tr) < tol, tr, jnp.floor(t))
     i0 = jax.lax.stop_gradient(i0)
     I = (i0 - shift).astype(jnp.int32)
     s = t - i0 + shift
@@ -130,8 +134,19 @@ class InterpPattern:
     def __init__(self, grid, p=None):
         self.grid = grid
         self.p = grid.p if p is None else p
+        if self.p > grid.p:
+            raise ValueError(
+                "interpolation degree %d exceeds the degree %d the band was "
+                "sized for; the wider stencils are not guaranteed to fit, so "
+                "rebuild the band with p=%d" % (self.p, grid.p, self.p)
+            )
         self.N = self.p + 1
         self.dim = grid.dim
+        if int(np.prod(grid.shape)) >= 2**31:
+            raise ValueError(
+                "grid has %d cells, too many for the int32 linear indices used "
+                "here" % int(np.prod(grid.shape))
+            )
         self.offsets = stencil_offsets(self.dim, self.N)  # (K, dim)
         self.K = self.offsets.shape[0]
         self._relpt = jnp.asarray(grid.relpt)

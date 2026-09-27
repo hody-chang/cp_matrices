@@ -113,31 +113,45 @@ class BandedGrid:
         its own inflated radius would spend the slack on nothing.
         """
         radius = safety * self.required_bw * float(np.max(self.dx))
+        return int(np.sum(self._outside_distances(dist_fun, chunk) <= radius))
+
+    def _outside_distances(self, dist_fun, chunk=200000):
+        """Distances to the surface, for grid points *not* in the band.
+
+        Computed once and returned as a flat array, because ``dist_fun`` can be a
+        neural network evaluated through a Newton solve -- expensive enough that
+        ``clearance`` must not call it once per safety level.
+        """
         total = int(np.prod(self.shape))
-        missing = 0
+        out = []
         for start in range(0, total, chunk):
             stop = min(start + chunk, total)
             idx = np.arange(start, stop)
+            idx = idx[self.inv[idx] < 0]
+            if idx.size == 0:
+                continue
             sub = np.stack(np.unravel_index(idx, self.shape), axis=1)
-            pts = self.relpt + sub * self.dx
-            near = np.asarray(dist_fun(pts)) <= radius
-            if np.any(near):
-                missing += int(np.sum(self.inv[idx[near]] < 0))
-        return missing
+            out.append(np.asarray(dist_fun(self.relpt + sub * self.dx)))
+        return np.concatenate(out) if out else np.zeros(0)
 
-    def clearance(self, dist_fun, safety_grid=None, chunk=200000):
-        """Largest ``safety`` in ``uncovered_near_surface`` that still returns 0.
+    def clearance(self, dist_fun, chunk=200000):
+        """How much of the Ruuth-Merriman radius the band covers, as a fraction.
 
-        Reported in units of the Ruuth-Merriman radius: 1.0 or more means the
-        band gives the surface full clearance, and smaller values say how much is
-        missing.  Returns 0.0 if even a tenth of the radius is not covered.
+        1.0 means the surface has full clearance: every grid point within the
+        Ruuth-Merriman radius of it is in the band.  Less than 1.0 says how far
+        out the band does reach, so 0.8 means the artificial Dirichlet edge has
+        come inside the outer 20% of the radius the discretization wants.
+
+        Exact rather than a search over levels: the answer is just the distance
+        from the surface to the nearest out-of-band grid point, in units of the
+        radius, capped at 1.0 since more slack than required is still full
+        clearance.
         """
-        grid = (1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1) \
-            if safety_grid is None else tuple(safety_grid)
-        for s in sorted(grid, reverse=True):
-            if self.uncovered_near_surface(dist_fun, safety=s, chunk=chunk) == 0:
-                return float(s)
-        return 0.0
+        d = self._outside_distances(dist_fun, chunk)
+        if d.size == 0:
+            return 1.0
+        radius = self.required_bw * float(np.max(self.dx))
+        return float(min(1.0, d.min() / radius))
 
     def neighbour_band_index(self, offset):
         """Band index of each band point shifted by integer ``offset``.
