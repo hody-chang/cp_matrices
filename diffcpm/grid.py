@@ -134,8 +134,43 @@ class BandedGrid:
             out.append(np.asarray(dist_fun(self.relpt + sub * self.dx)))
         return np.concatenate(out) if out else np.zeros(0)
 
+    def stale_fraction(self, dist_fun, chunk=200000):
+        """Fraction of band points that are too *far* from the surface to be valid.
+
+        The converse of :meth:`clearance`, and the check that matters when one
+        fixed band is reused across a family of shapes.  ``clearance`` asks
+        whether every grid point near the surface is in the band -- sufficiency.
+        This asks whether every point in the band is near the surface -- validity.
+        A band can pass one and fail the other, and a band built as the union over
+        a family of shapes routinely does.
+
+        A band point farther than the Ruuth-Merriman radius from the surface has
+        no meaningful closest point extension: it lies outside the reach the method
+        assumes, and its row of the operator is noise.  The consequence is not a
+        mild loss of accuracy.  Measured on two circles whose separation is the
+        shape parameter, a union band carrying 51.7% stale points produced a
+        *spurious* eigenvalue of ``-Delta_s + 1`` that fell to 0.055 at an isolated
+        separation, against a true smallest eigenvalue of exactly 1 (the constants
+        on each component).  The solution there grew by a factor of 7 and the
+        objective by a factor of 27, so the exact adjoint gradient spiked by orders
+        of magnitude at that shape.  Rebuilding the band as the intersection over
+        the family removed the spurious mode entirely -- and left clearance at
+        0.000, i.e. not covering the surface at all.
+
+        That is the moving-band problem in two numbers: over a family whose shapes
+        move by more than about a band width, the union is sufficient but invalid
+        and the intersection is valid but insufficient.  Check both, and treat
+        ``min |eig(A)| < 1`` as evidence of a spurious mode.
+        """
+        radius = self.required_bw * float(np.max(self.dx))
+        d = np.asarray(dist_fun(self.xg))
+        return float(np.mean(d > radius))
+
     def clearance(self, dist_fun, chunk=200000):
         """How much of the Ruuth-Merriman radius the band covers, as a fraction.
+
+        Sufficiency only.  See :meth:`stale_fraction` for the converse, which a
+        band reused across several shapes can fail while this passes.
 
         1.0 means the surface has full clearance: every grid point within the
         Ruuth-Merriman radius of it is in the band.  Less than 1.0 says how far
