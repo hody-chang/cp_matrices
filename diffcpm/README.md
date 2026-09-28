@@ -193,6 +193,9 @@ of the following are assertions in that file, not claims:
 * `dJ/d(shape)` matches central differences for a circle radius, ellipse axes
   (through the implicit-solver/IFT path), torus radii, and a 3D sphere radius.
 * `dJ/dphi` matches central differences in random SIREN weight-space directions.
+* The discrete surface Laplacian's spectrum matches `lambda_j = -(2 pi j/L)^2` for
+  a closed curve, for a circle and for an ellipse whose closest points come from
+  the Newton/IFT path (`ex5`, to ~1e-4 on the low modes).
 * The discrete objective converges to `J(R) = 1/2 int_Gamma u^2 ds` on a circle at
   second order, and the discrete shape derivative converges to the exact
   continuous shape derivative — but not at second order, see below.
@@ -335,6 +338,24 @@ handled.
 **Ill-posedness.** Nothing here decides how much regularization an inverse
 problem needs, or whether a parameter is identifiable from given data. The
 examples show the effect but do not resolve it.
+
+**The inverse crime, and how to avoid reporting it.** Every synthetic recovery in
+the examples generates its data with a forward model and then inverts one. When
+those two are the *same* discrete model, the discretization error cancels exactly
+and a noise-free recovery lands on machine precision — `ex5` control 1 recovers
+ellipse axes to 2.4e-14. That number says the adjoint and the optimizer are
+mutually consistent, which is worth knowing, and it says nothing whatever about
+accuracy. It is easy to quote it as though it did.
+
+The honest version needs the data to come from a different model. `ex5` control 2
+generates data on a grid twice as fine and inverts on the coarse one, which
+breaks the cancellation: the axis error becomes 4.9e-4, from a between-grid data
+mismatch of 1.9e-4 rms. That is the real discretization bias at `dx = 0.08`, and
+it is the same order as the error the sensor noise causes in the noisy run — so
+at that noise level neither alone is the binding constraint. `ex4` is in the same
+position for a different reason: its "exact" row is a self-consistency check, but
+its SIREN rows invert a genuinely different geometry from the one that made the
+data, so those errors are real.
 
 ## Requirements
 
