@@ -95,8 +95,10 @@ before trusting a result: `pattern.violations(cp) == 0` and
 | `sdf.py` | closest points on a level set via Newton + IFT; a small SIREN; Adam |
 | `surfaces.py` | circle/sphere/torus closed forms, ellipsoid via the implicit solver |
 | `inverse.py` | observation operator, misfit, regularizers, finite-difference checker |
-| `tests/test_diffcpm.py` | the verification suite |
+| `mesh.py` | PLY reading, exact mesh closest points, signed distance |
+| `tests/test_diffcpm.py` | the verification suite (23 tests) |
 | `../examples_diffcpm/` | runnable experiments |
+| `../scripts/` | `fit_bunny_siren.py`, which fits and caches a neural SDF for the bunny |
 
 Conventions match the MATLAB `cp_matrices/` in this repository: ndgrid tensor
 grids, C-order linear indices, the Ruuth–Merriman band radius of
@@ -176,7 +178,7 @@ everywhere, at O(N^2) instead of O(N) for `N = p+1 <= 8`.
 
 ## What is verified
 
-`python diffcpm/tests/test_diffcpm.py` (19 tests, or run it under pytest). All
+`python diffcpm/tests/test_diffcpm.py` (23 tests, or run it under pytest). All
 of the following are assertions in that file, not claims:
 
 * `E` reproduces polynomials of degree `<= p` at the closest points to 1e-11, and
@@ -208,6 +210,13 @@ of the following are assertions in that file, not claims:
   same grid.
 * Fourth-order differences are rejected on a band built for `stenrad = 1`, and
   beat second order when given a band built for `stenrad = 2`.
+* Mesh closest points agree with brute force over every triangle, on an
+  icosahedron and on the repository's bunny (5.6e-17), including query points
+  inside the mesh and on its surface; signed distance has the right sign inside
+  and out with magnitude equal to the closest distance.
+* The hardened closest point solve converges on a level set whose gradient decays
+  away from the surface, where the naive path diverges — a test that asserts both,
+  so it keeps exercising the fix.
 
 ## Scope: what is here and what is not
 
@@ -220,18 +229,46 @@ they landed:
    geometry gradients, and a closed-form shape derivative to check against
    (`ex3`) rather than only finite differences.
 
-2. **"Swap in a SIREN-fitted bunny and repeat."** Done for the SIREN, not for the
-   bunny. `ex4` fits SIRENs of varying quality to a circle and measures the
-   exchange rate between the surface fit and the recovered parameters, which is
-   the question the step exists to answer; the gradient path through the network
-   weights is verified in the test suite. What a bunny would add is scale, not a
-   new code path — and scale is exactly what the solver is not ready for: a
-   bunny at a useful `dx` puts tens of thousands of unknowns in the band, which
-   wants CPM multigrid rather than dense LU or unpreconditioned GMRES. The
-   triangulation is already in `../surfaces/tri/`, so this is a matter of the
-   solver, not the layer.
+2. **"Swap in a SIREN-fitted bunny and repeat."** Now done, in `ex7`, and the
+   result is more interesting than a pass would have been. `ex4` does the circle
+   version and measures a clean first-order exchange rate between surface fit and
+   recovered parameters (slope 1.03). `ex7` does the bunny: 69,451 triangles, up
+   to 20,355 unknowns, run twice over — once with exact mesh closest points and
+   once with a SIREN fitted to that mesh — against data generated on a grid twice
+   as fine.
 
-3. **Morph one neural SDF until its first ~10 Laplace–Beltrami eigenvalues match
+   Two things came out of it. The learned surface is **not** worse than the exact
+   mesh; if anything it is slightly better. And **neither converges cleanly**:
+   the recovered field is about 20% wrong at best, non-monotonically, with the
+   misfit 9 to 73 times its noise floor, so model error rather than noise is what
+   the fit is up against. The circle's tidy first-order story does not extend to
+   the bunny, and the reason appears in the limitations below.
+
+   Also revised: unpreconditioned GMRES reaches 1e-14 in about two seconds at
+   10,000 unknowns, so the solver was never the obstacle at this scale. It
+   becomes one at the ~8e5 unknowns that resolving the bunny's features properly
+   would need.
+
+3. **A topology change, which is the experiment that separates this from
+   differentiable mesh FEM.** Added as `ex6`, in 2D: two circles combined with a
+   smooth union, whose separation is the shape parameter, so the topology changes
+   at a known place (`s = r + k log 2`, confirmed against a connected-component
+   count). Sweeping through the merge, the linear solve does not react — residual
+   near 2e-13 on both sides, band clearance intact — while the component count
+   steps from 2 to 1, which is the integer a mesh pipeline would have to rebuild
+   around and cannot differentiate across.
+
+   The closest point solve *is* affected, which an earlier version of that script
+   wrongly denied: the merged shape has a saddle at the seam where the closest
+   point is ill conditioned, and leaner Newton settings left `|f(cp)|` at 1e-1
+   after the merge against 1e-16 before it. So a topology change costs the solver
+   nothing and asks more of the geometry side.
+
+   Two limits on what this shows. It is 2D, and the "mesh baseline" is the
+   component count rather than a real differentiable FEM run, so it demonstrates
+   the mechanism that breaks a mesh pipeline and is not a head-to-head comparison.
+
+4. **Morph one neural SDF until its first ~10 Laplace–Beltrami eigenvalues match
    another shape's.** Partly, and the "partly" is informative. `ex5` verifies the
    discrete surface Laplacian's spectrum against the exact
    `lambda_j = -(2 pi j/L)^2` for a closed curve, for a circle *and* for an
@@ -245,7 +282,8 @@ they landed:
    the PDE solution, which exercises the same geometry gradient against a target
    that is actually identifiable.
 
-Not attempted: Gray–Scott or Turing parameter identification, optimal control of
+Not attempted: a differentiable mesh-FEM baseline to compare against, a 3D
+topology change, Gray–Scott or Turing parameter identification, optimal control of
 a surface field, and mean first passage time optimization. Those are applications
 of the layer rather than parts of it, and each needs a time-dependent or
 constrained formulation on top of what is here.
@@ -330,6 +368,25 @@ surface. Widen the band to push that boundary away.
 restarted GMRES. Neither is the right answer at 3D production sizes; CPM
 multigrid (Chen & Macdonald) or a preconditioned Krylov method would be. The
 `dense_limit` heuristic in `linear_solve` picks dense below 2500 unknowns.
+
+**Real geometry has features below any affordable grid, and that sets an error
+floor.** On the bunny, 2 to 4% of band points have a genuinely non-unique closest
+point — they sit at or beyond the medial axis — at every spacing tested from
+`dx = 0.12` down to `0.04`, and the fraction does **not** shrink with refinement.
+The bunny's ear tips, base hole and near self-contacts have local feature sizes
+below the band half-width, which runs from 0.49 down to 0.17 over that range.
+
+A fixed fraction of band points whose closest point extension is invalid gives a
+fixed error floor, and that is the most likely explanation for `ex7` recovering
+the diffusivity field to only about 20% and not converging monotonically, with a
+misfit 9 to 73 times its noise floor. Getting under the floor needs
+`bandwidth * dx` below the local feature size, which for this shape means
+`dx` around 0.01 and therefore roughly 8e5 unknowns — which is the concrete,
+measured reason to put CPM multigrid first rather than an estimate of one.
+
+This is the CPM analogue of a well known constraint and it is worth stating
+plainly: the method assumes the closest point is unique within the band, and a
+scanned surface does not grant that at practical resolutions.
 
 **Open surfaces** need unsigned distance fields, whose gradients vanish on the
 surface, so the Newton system for the closest point degenerates there. Not
