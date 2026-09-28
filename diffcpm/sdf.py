@@ -63,30 +63,65 @@ def _initial_guess(f, params, x, projection_steps):
     return jnp.concatenate([y, jnp.atleast_1d(mu)])
 
 
-def _newton(res, z0, iters, damping):
+def _newton(res, z0, iters, damping, n_backtrack=6, max_step=None):
+    """Damped Gauss-Newton with monotone backtracking.
+
+    A plain damped step is not enough on a *learned* SDF.  Where the network's
+    gradient is small the Jacobian is nearly singular, the step is enormous, and
+    the iteration leaves the region where anything is meaningful -- on a SIREN
+    fitted to the Stanford bunny this produced closest points thousands of units
+    away, with the residual stuck near 1.
+
+    So each step is accepted only if it reduces ||F||.  A geometric ladder of
+    step lengths is evaluated (1, 1/2, 1/4, ...), the best is taken, and if none
+    improves on the current point the iterate is left where it is.  That makes
+    the residual non-increasing by construction, which is what turns divergence
+    into a clean per-point failure the caller can detect and exclude.  The ladder
+    is evaluated unconditionally rather than in a loop with an early exit, so it
+    stays a fixed-shape computation that jit and vmap can handle.
+
+    ``max_step`` additionally clips the step length, which bounds how far a
+    single iteration can travel regardless of the Jacobian.
+    """
+    eye = jnp.eye(z0.shape[0])
+    alphas = 0.5 ** jnp.arange(n_backtrack)
+
     def step(z, _):
         r = res(z)
+        f0 = jnp.sum(r * r)
         J = jax.jacobian(res)(z)
-        # Levenberg-style damping keeps the step finite if J is near-singular,
-        # which happens when x sits on the medial axis (cp is not unique there).
-        JtJ = J.T @ J + damping * jnp.eye(z.shape[0])
-        dz = jnp.linalg.solve(JtJ, J.T @ r)
-        return z - dz, None
+        JtJ = J.T @ J
+        # scale the damping to the problem so it means the same thing on any SDF
+        lam = damping * (jnp.trace(JtJ) / z.shape[0] + 1e-300)
+        dz = jnp.linalg.solve(JtJ + lam * eye, J.T @ r)
+        if max_step is not None:
+            nrm = jnp.linalg.norm(dz)
+            dz = dz * jnp.minimum(1.0, max_step / (nrm + 1e-300))
+        dz = jnp.where(jnp.isfinite(dz), dz, 0.0)
+
+        cands = z - alphas[:, None] * dz
+        fs = jax.vmap(lambda c: jnp.sum(res(c) ** 2))(cands)
+        fs = jnp.where(jnp.isfinite(fs), fs, jnp.inf)
+        i = jnp.argmin(fs)
+        return jnp.where(fs[i] < f0, cands[i], z), None
 
     z, _ = jax.lax.scan(step, z0, None, length=iters)
     return z
 
 
 def cp_level_set_single(f, params, x, *, projection_steps=6, newton_iters=12,
-                        damping=1e-12):
+                        damping=1e-10, max_step=None, n_backtrack=6):
     """Closest point on ``{f(params, .) = 0}`` to the single point ``x``.
 
     Gradients w.r.t. both ``params`` and ``x`` come from the IFT at the root.
+    On a learned SDF, set ``max_step`` to a length scale of the problem (a few
+    grid cells, say) -- see :func:`_newton` for why.
     """
     res = lambda z: _residual(f, params, x, z)
 
     def solve(res_fn, z0):
-        return _newton(res_fn, z0, newton_iters, damping)
+        return _newton(res_fn, z0, newton_iters, damping,
+                       n_backtrack=n_backtrack, max_step=max_step)
 
     def tangent_solve(g_lin, y):
         J = jax.jacobian(g_lin)(jnp.zeros_like(y))
@@ -103,24 +138,35 @@ def cp_level_set(f, params, xs, **kwargs):
     return jax.vmap(fn)(xs)
 
 
-def level_set_residual_norm(f, params, xs, cps):
-    """Diagnostics for a batch of computed closest points.
+def level_set_residuals(f, params, xs, cps):
+    """Per-point closest point residuals: ``(|f(cp)|, |sin angle|)``.
 
-    Returns ``(max |f(cp)|, max |sin angle between (cp-x) and grad f(cp)|)``.
-    Both should be at machine-precision level if Newton converged.
+    Per-point rather than reduced, because on real geometry a few points fail
+    while the rest are at machine precision, and a maximum alone cannot tell
+    those two situations apart.  Use these to mask the failures out and to report
+    how many there were.
     """
     gs = jax.vmap(jax.grad(f, argnums=1), in_axes=(None, 0))(params, cps)
     fv = jax.vmap(f, in_axes=(None, 0))(params, cps)
     d = cps - xs
     dn = jnp.linalg.norm(d, axis=1) + 1e-30
     ghat = gs / (jnp.linalg.norm(gs, axis=1, keepdims=True) + 1e-30)
-    # The sine of the angle straight from the component of d perpendicular to
+    perp = d - jnp.sum(d * ghat, axis=1, keepdims=True) * ghat
+    return jnp.abs(fv), jnp.linalg.norm(perp, axis=1) / dn
+
+
+def level_set_residual_norm(f, params, xs, cps):
+    """Diagnostics for a batch of computed closest points.
+
+    Returns ``(max |f(cp)|, max |sin angle between (cp-x) and grad f(cp)|)``.
+    Both should be at machine-precision level if Newton converged.
+    """
+    # The sine of the angle comes from the component of d perpendicular to
     # grad f.  Going via sqrt(1 - cos^2) instead loses half the digits to
     # cancellation when the angle is small, which is exactly the regime we are
     # trying to measure, and puts a spurious floor of ~1e-8 on the diagnostic.
-    perp = d - jnp.sum(d * ghat, axis=1, keepdims=True) * ghat
-    sin = jnp.linalg.norm(perp, axis=1) / dn
-    return float(jnp.max(jnp.abs(fv))), float(jnp.max(sin))
+    fv, sin = level_set_residuals(f, params, xs, cps)
+    return float(jnp.max(fv)), float(jnp.max(sin))
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +202,7 @@ def siren_apply(params, x):
 
 
 def adam(loss_and_grad, params, steps, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8,
-         callback=None):
+         callback=None, key=None):
     """Minimal Adam, so the package depends only on jax/numpy.
 
     The whole loop is put inside a single ``lax.scan`` and jitted, which matters:
@@ -165,15 +211,27 @@ def adam(loss_and_grad, params, steps, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8,
     ``callback`` forces the Python loop, since a callback cannot be traced --
     use it for monitoring, not for fitting.
 
+    Pass ``key`` to train on minibatches: ``loss_and_grad`` is then called as
+    ``loss_and_grad(params, subkey)`` with a fresh subkey each step, so the loss
+    can draw its own batch.  Full-batch training on a large 3D sample set is
+    slower than it needs to be, and on CPU it is the difference between minutes
+    and hours.
+
     Returns ``(params, final_loss)``.
     """
     tree_map = jax.tree_util.tree_map
     m0 = tree_map(jnp.zeros_like, params)
     v0 = tree_map(jnp.zeros_like, params)
+    minibatch = key is not None
 
     def step(carry, t):
-        params, m, v = carry
-        loss, g = loss_and_grad(params)
+        if minibatch:
+            params, m, v, k = carry
+            k, sub = jax.random.split(k)
+            loss, g = loss_and_grad(params, sub)
+        else:
+            params, m, v = carry
+            loss, g = loss_and_grad(params)
         m = tree_map(lambda m_, g_: b1 * m_ + (1 - b1) * g_, m, g)
         v = tree_map(lambda v_, g_: b2 * v_ + (1 - b2) * g_ * g_, v, g)
         bc1 = 1 - b1 ** t
@@ -182,17 +240,17 @@ def adam(loss_and_grad, params, steps, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8,
             lambda p_, m_, v_: p_ - lr * (m_ / bc1) / (jnp.sqrt(v_ / bc2) + eps),
             params, m, v,
         )
-        return (params, m, v), loss
+        return ((params, m, v, k) if minibatch else (params, m, v)), loss
+
+    init = (params, m0, v0, key) if minibatch else (params, m0, v0)
 
     if callback is None:
         ts = jnp.arange(1, steps + 1, dtype=jnp.float64 if jax.config.read(
             "jax_enable_x64") else jnp.float32)
-        (params, _, _), losses = jax.jit(
-            lambda p, m, v: jax.lax.scan(step, (p, m, v), ts)
-        )(params, m0, v0)
-        return params, float(losses[-1])
+        carry, losses = jax.jit(lambda c: jax.lax.scan(step, c, ts))(init)
+        return carry[0], float(losses[-1])
 
-    carry = (params, m0, v0)
+    carry = init
     jstep = jax.jit(step)
     loss = None
     for t in range(1, steps + 1):
