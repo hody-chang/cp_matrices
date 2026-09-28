@@ -52,6 +52,12 @@ THETA_TRUE = np.array([0.20, 0.35, -0.25, 0.30])
 NSENSOR = 120
 NOISE = 2e-3
 GMRES = dict(method="gmres", tol=1e-12, maxiter=800, restart=50)
+# Small systems: let linear_solve pick dense LU, which cannot fail to converge.
+# The extracted polylines here are a few hundred unknowns, and the comparison is
+# about discretizations rather than about which Krylov method survives a badly
+# conditioned matrix.
+AUTO = dict(method="auto", tol=1e-12, maxiter=800, restart=50)
+SNAP = 0.02   # snap a contour crossing to a grid node within 2% of the edge
 
 
 # ---------------------------------------------------------------------------
@@ -249,15 +255,28 @@ def marching_squares(s, h, half=(1.9, 1.2), tol=1e-9):
         return vmap[key]
 
     def crossing(pa, pb, fa, fb):
-        # Clamp t away from the endpoints.  When the contour passes almost
-        # exactly through a grid node, t lands at 0 or 1, the crossing coincides
-        # with the node, two crossings in one cell can coincide, and the segment
-        # has zero length -- whose P1 stiffness is 1/L. That produced NaN for 9 of
-        # 13 shapes in the first run of this experiment. This is a defect of the
-        # extractor, not of FEM, so it has to be fixed before the comparison means
-        # anything.
+        # Snap to the grid node when the crossing lands within SNAP of it, rather
+        # than merely clamping away from it.
+        #
+        # Clamping was the first attempt and it did not work. When the contour
+        # passes almost exactly through a node -- which happens for every "round"
+        # value of s, since the circles' extreme points then sit on grid lines --
+        # a clamped crossing leaves a sliver segment of length ~1e-6 h. A P1
+        # segment stiffness is 1/L, so the system's condition number went to
+        # 4.4e9 and GMRES returned NaN, while a dense solve on the same matrix was
+        # fine. Snapping instead makes adjacent cells share the node exactly, so
+        # no sliver is created; a coincident pair then gives a zero-length segment
+        # that the filter below removes, which is the right answer when the
+        # contour really does pass through the node.
+        #
+        # Sliver generation is itself a real cost of re-extraction, and one more
+        # way the extracted mesh depends erratically on the shape parameter. It is
+        # not the point being measured here, so it is dealt with properly.
         t = fa / (fa - fb)
-        t = min(max(t, 1e-6), 1.0 - 1e-6)
+        if t < SNAP:
+            t = 0.0
+        elif t > 1.0 - SNAP:
+            t = 1.0
         return (pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1]))
 
     for i in range(len(xs) - 1):
@@ -317,7 +336,7 @@ def fem_objective_at(s, h_mesh, sensors_np, data):
     fe = P1Surface(len(verts), segs)
     vj = jnp.asarray(verts)
     f = 1.0 + vj[:, 0] + 0.25 * vj[:, 1]
-    u = fe.solve(vj, jnp.ones(len(verts)), f, **GMRES)
+    u = fe.solve(vj, jnp.ones(len(verts)), f, **AUTO)
     cells, w = polyline_observer(verts, segs, sensors_np)
     pred = observe(u, cells, w)
     ncomp = _count_components(len(verts), segs)
