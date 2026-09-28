@@ -49,13 +49,30 @@ def _residual(f, params, x, z):
     return jnp.concatenate([y - x - mu * g, jnp.atleast_1d(f(params, y))])
 
 
-def _initial_guess(f, params, x, projection_steps):
-    """A few gradient-flow projection steps, purely as a Newton starting point."""
+def _initial_guess(f, params, x, projection_steps, max_step=None):
+    """A few gradient-flow projection steps, purely as a Newton starting point.
+
+    The step ``-f grad f / |grad f|^2`` has length ``|f| / |grad f|``, which is
+    exactly the quantity that blows up on a learned SDF: where the gradient decays
+    away from the surface, a single step can travel arbitrarily far.  Backtracking
+    inside the Newton solve cannot repair this, because it only guarantees the
+    residual does not *increase* from wherever it starts -- and by then the
+    starting point is already useless.  A test on ``tanh(5(|y|-1))``, whose zero
+    set is the unit sphere, landed 1.4e9 away from it before Newton ran at all.
+
+    So the projection steps are clipped to ``max_step`` as well.  Clipping only
+    slows the approach to the surface; it cannot move the converged root, which is
+    fixed by the first-order conditions Newton then enforces.
+    """
 
     def step(y, _):
         val, g = jax.value_and_grad(f, argnums=1)(params, y)
         gn2 = jnp.sum(g * g) + 1e-30
-        return y - val * g / gn2, None
+        d = -val * g / gn2
+        if max_step is not None:
+            d = d * jnp.minimum(1.0, max_step / (jnp.linalg.norm(d) + 1e-300))
+        d = jnp.where(jnp.isfinite(d), d, 0.0)
+        return y + d, None
 
     y, _ = jax.lax.scan(step, x, None, length=projection_steps)
     g = jax.grad(f, argnums=1)(params, y)
@@ -127,7 +144,7 @@ def cp_level_set_single(f, params, x, *, projection_steps=6, newton_iters=12,
         J = jax.jacobian(g_lin)(jnp.zeros_like(y))
         return jnp.linalg.solve(J, y)
 
-    z0 = _initial_guess(f, params, x, projection_steps)
+    z0 = _initial_guess(f, params, x, projection_steps, max_step=max_step)
     z = jax.lax.custom_root(res, z0, solve, tangent_solve)
     return z[: x.shape[0]]
 

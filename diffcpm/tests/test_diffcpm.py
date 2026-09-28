@@ -30,8 +30,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from diffcpm.grid import band_from_cp, make_grid1d
 from diffcpm.interp import InterpPattern, apply_sparse, apply_sparse_T
 from diffcpm.inverse import Observer, check_gradient, misfit
+from diffcpm.mesh import TriMesh, read_ply
 from diffcpm.operators import build_operator, laplacian_pattern
-from diffcpm.sdf import cp_level_set, level_set_residual_norm, siren_apply, siren_init
+from diffcpm.sdf import (cp_level_set, level_set_residual_norm,
+                         level_set_residuals, siren_apply, siren_init)
 from diffcpm.solve import solve_operator
 from diffcpm.surfaces import (ellipsoid_cp, ellipsoid_level_set, sphere_cp,
                               sphere_level_set, torus_cp, torus_level_set)
@@ -64,6 +66,114 @@ def circle_problem(grid, R, k=3, alpha=-1.0, c=1.0, pattern=None):
 # ---------------------------------------------------------------------------
 # operators
 # ---------------------------------------------------------------------------
+
+
+def _icosahedron():
+    """A closed convex triangle mesh, for testing mesh queries against geometry."""
+    t = (1.0 + np.sqrt(5.0)) / 2.0
+    v = np.array([[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
+                  [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
+                  [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]], dtype=float)
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    f = np.array([[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+                  [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+                  [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+                  [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]])
+    return TriMesh(v, f)
+
+
+def test_mesh_closest_point_matches_bruteforce():
+    """The KD-tree candidate search plus exact pass equals checking every triangle.
+
+    The tree is a heuristic and the bound that would make it provable is loose,
+    so the exact second pass is the thing being tested here: it must agree with
+    brute force over every triangle, including for query points inside the mesh
+    and on its surface, where the closest point sits on an edge or vertex and the
+    barycentric region logic actually gets exercised.
+    """
+    mesh = _icosahedron()
+    key = np.random.default_rng(0)
+    outside = key.normal(size=(200, 3)) * 1.5
+    inside = key.normal(size=(200, 3)) * 0.2
+    onsurf = mesh.verts[key.integers(0, len(mesh.verts), 40)]
+    edges = 0.5 * (mesh.tri[:, 0] + mesh.tri[:, 1])
+    pts = np.concatenate([outside, inside, onsurf, edges])
+
+    got = mesh.closest_point(pts, k=8, exact=True)
+    ref = mesh.closest_point_bruteforce(pts)
+    assert np.abs(got - ref).max() < 1e-12, np.abs(got - ref).max()
+
+    # points already on the surface are their own closest point
+    d_surf = np.linalg.norm(mesh.closest_point(onsurf, k=8) - onsurf, axis=1)
+    assert d_surf.max() < 1e-12, d_surf.max()
+
+
+def test_mesh_signed_distance_sign_and_magnitude():
+    """Signed distance: correct sign, and magnitude equal to the closest distance."""
+    mesh = _icosahedron()
+    key = np.random.default_rng(1)
+    d = key.normal(size=(400, 3))
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
+    far = d * 2.0
+    near_centre = d * 0.15
+
+    sd_far = mesh.signed_distance(far)
+    sd_in = mesh.signed_distance(near_centre)
+    assert np.all(sd_far > 0), sd_far.min()
+    assert np.all(sd_in < 0), sd_in.max()
+
+    pts = np.concatenate([far, near_centre])
+    cp = mesh.closest_point(pts, k=8)
+    assert np.abs(np.abs(mesh.signed_distance(pts))
+                  - np.linalg.norm(cp - pts, axis=1)).max() < 1e-12
+
+
+def test_mesh_reads_the_repository_bunny():
+    """The PLY reader handles the real file in ../surfaces/tri/.
+
+    Also records what that file actually contains: 1,113 of its 35,947 vertices
+    belong to no face.  A test asserting every vertex lies on the surface would
+    fail on those, which is how they were found.
+    """
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "surfaces", "tri", "bunny.ply")
+    if not os.path.exists(path):
+        return
+    verts, faces = read_ply(path)
+    assert verts.shape == (35947, 3), verts.shape
+    assert faces.shape == (69451, 3), faces.shape
+    assert faces.min() >= 0 and faces.max() < len(verts)
+    used = np.zeros(len(verts), bool)
+    used[faces.ravel()] = True
+    assert int((~used).sum()) == 1113, int((~used).sum())
+
+
+def test_newton_backtracking_rescues_a_flat_gradient():
+    """Backtracking turns closest point divergence into convergence.
+
+    ``f(y) = tanh(5 (|y| - 1))`` has the unit sphere as its zero set but a
+    gradient that decays to nothing away from it -- the same condition a learned
+    SDF is in, and the one that made the bunny produce closest points thousands of
+    units away.  From a distant start the undamped step is enormous.  With
+    monotone backtracking the residual cannot increase, so the iteration either
+    converges or stays put, and here it converges to the analytic answer.
+    """
+    f = lambda _p, y: jnp.tanh(5.0 * (jnp.linalg.norm(y) - 1.0))
+    xs = jnp.array([[3.0, 0.0, 0.0], [0.0, -2.5, 1.5], [2.0, 2.0, 2.0]])
+    exact = xs / jnp.linalg.norm(xs, axis=1, keepdims=True)
+
+    naive = cp_level_set(f, 0.0, xs, projection_steps=4, newton_iters=15,
+                         damping=0.0, n_backtrack=1)
+    robust = cp_level_set(f, 0.0, xs, projection_steps=4, newton_iters=25,
+                          damping=1e-10, n_backtrack=8, max_step=1.0)
+
+    err_naive = float(jnp.max(jnp.abs(naive - exact)))
+    err_robust = float(jnp.max(jnp.abs(robust - exact)))
+    assert err_robust < 1e-9, err_robust
+    assert err_naive > 1e-3, ("the naive path was expected to fail here; if this "
+                              "trips, the test no longer exercises the fix", err_naive)
+    fv, sn = level_set_residuals(f, 0.0, xs, robust)
+    assert float(jnp.max(fv)) < 1e-10 and float(jnp.max(sn)) < 1e-9
 
 
 def test_implicit_cp_matches_closed_form():
