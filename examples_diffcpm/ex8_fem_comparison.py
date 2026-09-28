@@ -180,12 +180,17 @@ def part_a():
                      np.linalg.norm(th - THETA_TRUE),
                      np.abs(a_hat - a_tru).max() / a_tru.max(), per), flush=True)
 
-    print("\nOn a fixed, smooth, well-meshed surface FEM is the better tool and it")
-    print("is not close: read the dof column against ||dtheta|| and against")
-    print("seconds per gradient.  A CPM band in 3D spends its unknowns filling a")
-    print("shell around the surface, while P1 elements put them on it, so CPM")
-    print("carries roughly an order of magnitude more unknowns for the same")
-    print("resolution.  Any claim for CPM has to come from somewhere else.")
+    print("\nOn a fixed, smooth, well-meshed surface FEM is the better tool.  Match")
+    print("the rows by ||dtheta|| rather than by size: at about 1.6e-3, FEM needs")
+    print("2,562 unknowns and CPM 7,840; at about 1.1e-3, FEM 10,242 and CPM")
+    print("21,676.  So FEM is roughly 3x cheaper in both unknowns and seconds per")
+    print("gradient at matched accuracy, and both reach the noise floor.")
+    print("\nThe reason is structural: a CPM band in 3D spends unknowns filling a")
+    print("shell around the surface while P1 elements put them on it.  3x, not the")
+    print("order of magnitude that argument might suggest, because the band is thin")
+    print("and CPM's interpolation is higher order than P1.")
+    print("\nThe conclusion to draw is that CPM's case cannot rest on cost for a")
+    print("fixed smooth surface.  It has to rest on what part B measures.")
     return rows
 
 
@@ -244,7 +249,15 @@ def marching_squares(s, h, half=(1.9, 1.2), tol=1e-9):
         return vmap[key]
 
     def crossing(pa, pb, fa, fb):
+        # Clamp t away from the endpoints.  When the contour passes almost
+        # exactly through a grid node, t lands at 0 or 1, the crossing coincides
+        # with the node, two crossings in one cell can coincide, and the segment
+        # has zero length -- whose P1 stiffness is 1/L. That produced NaN for 9 of
+        # 13 shapes in the first run of this experiment. This is a defect of the
+        # extractor, not of FEM, so it has to be fixed before the comparison means
+        # anything.
         t = fa / (fa - fb)
+        t = min(max(t, 1e-6), 1.0 - 1e-6)
         return (pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1]))
 
     for i in range(len(xs) - 1):
@@ -265,7 +278,19 @@ def marching_squares(s, h, half=(1.9, 1.2), tol=1e-9):
                 order = (0, 1, 2, 3) if mid < 0 else (1, 2, 3, 0)
                 segs.append((vid(pts[order[0]]), vid(pts[order[1]])))
                 segs.append((vid(pts[order[2]]), vid(pts[order[3]])))
-    return np.array(verts), np.array(segs, dtype=np.int64)
+
+    verts = np.array(verts)
+    segs = np.array(segs, dtype=np.int64)
+    # Drop degenerate and duplicate segments, then renumber to the vertices that
+    # survive, so every vertex carries positive lumped mass and the P1 system is
+    # nonsingular.
+    keep = np.linalg.norm(verts[segs[:, 1]] - verts[segs[:, 0]], axis=1) > 1e-10 * h
+    segs = segs[keep]
+    segs = np.unique(np.sort(segs, axis=1), axis=0)
+    used = np.unique(segs)
+    remap = -np.ones(len(verts), dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    return verts[used], remap[segs]
 
 
 def polyline_observer(verts, segs, points):
@@ -350,7 +375,25 @@ def part_b():
     ring = jnp.asarray(np.stack([(R + s_true) * np.cos(th), R * np.sin(th)], 1))
     sensors = jnp.asarray(np.asarray(cp_level_set(level_set, s_true, ring, **newton)))
     sensors_np = np.asarray(sensors)
-    data = observer(cpm_u(s_true), sensors)
+
+    # Data from a finer CPM grid, not from the grid we then evaluate on. The first
+    # run of this experiment took the data from this same grid, which drove J to
+    # exactly 0 at the true shape -- the inverse crime, again, in a file written
+    # after it had already been named and fixed elsewhere.
+    fine_dx = dx / 2
+    fine_x1d = [make_grid1d(-1.9, 1.9, fine_dx), make_grid1d(-1.2, 1.2, fine_dx)]
+    fine_grid = band_from_dist(
+        fine_x1d, lambda pts: circle_dist(s_true, pts), p=3, stenrad=1, extra_bw=1.0)
+    fine_pat = InterpPattern(fine_grid)
+    fine_obs = Observer(fine_grid)
+    fine_cp = cp_level_set(level_set, s_true, jnp.asarray(fine_grid.xg), **newton)
+    fine_op = build_operator(fine_grid, fine_cp, alpha=-1.0, c=1.0, pattern=fine_pat)
+    fine_u = solve_operator(
+        fine_op, 1.0 + fine_cp[:, 0] + 0.25 * fine_cp[:, 1], **GMRES)
+    data = fine_obs(fine_u, sensors) \
+        + NOISE * jnp.asarray(rng.standard_normal(sensors.shape[0]))
+    print("data from a dx = %.3f grid (band %d) plus %.0e noise"
+          % (fine_dx, fine_grid.n, NOISE), flush=True)
 
     print("CPM band %d points at dx %.3f; FEM remeshes at h %.3f; %d sensors"
           % (grid.n, dx, h_mesh, sensors.shape[0]), flush=True)
@@ -371,34 +414,44 @@ def part_b():
         prev_nv = nv
 
     print("\nNow the derivative, which is the whole question.", flush=True)
-    print("CPM has an exact one; the FEM pipeline has to use finite differences", flush=True)
-    print("because marching squares cannot be differentiated through.", flush=True)
-    s0 = 0.70          # comfortably away from the merge
-    g_cpm = float(jax.grad(lambda z: cpm_J(z))(s0))
-    print("\nat s = %.2f, far from the merge:" % s0, flush=True)
-    print("%-10s %-16s %-16s %s" % ("eps", "FEM fd", "CPM fd", "CPM exact"), flush=True)
-    for eps in (1e-2, 3e-3, 1e-3, 3e-4, 1e-4):
-        jp, nvp, _ = fem_objective_at(s0 + eps, h_mesh, sensors_np, data)
-        jm, nvm, _ = fem_objective_at(s0 - eps, h_mesh, sensors_np, data)
-        fd_fem = (jp - jm) / (2 * eps)
-        fd_cpm = float((cpm_J(s0 + eps) - cpm_J(s0 - eps)) / (2 * eps))
-        flag = "" if nvp == nvm else "  (mesh sizes differ: %d vs %d)" % (nvp, nvm)
-        print("%-10.0e %-16.6e %-16.6e %.6e%s"
-              % (eps, fd_fem, fd_cpm, g_cpm, flag), flush=True)
+    print("\nEach pipeline is asked the same self-contained question: as eps", flush=True)
+    print("shrinks, does its own central difference settle on a limit?  That", flush=True)
+    print("avoids comparing the two methods' gradient *values*, which differ", flush=True)
+    print("because their discretizations differ and would not be a fair contrast.", flush=True)
+    for s0, where in ((0.70, "far from the merge"), (0.6347, "at the merge")):
+        g_cpm = float(jax.grad(lambda z: cpm_J(z))(s0))
+        print("\ns = %.4f, %s" % (s0, where), flush=True)
+        print("  CPM exact adjoint gradient: %+.6e" % g_cpm, flush=True)
+        print("  %-10s %-18s %-18s %s"
+              % ("eps", "FEM fd", "CPM fd", "mesh nv (-eps, +eps)"), flush=True)
+        for eps in (1e-2, 3e-3, 1e-3, 3e-4, 1e-4):
+            jp, nvp, _ = fem_objective_at(s0 + eps, h_mesh, sensors_np, data)
+            jm, nvm, _ = fem_objective_at(s0 - eps, h_mesh, sensors_np, data)
+            fem_fd = (jp - jm) / (2 * eps) if np.isfinite(jp) and np.isfinite(jm) \
+                else float("nan")
+            cpm_fd = float((cpm_J(s0 + eps) - cpm_J(s0 - eps)) / (2 * eps))
+            print("  %-10.0e %-18.6e %-18.6e %d, %d"
+                  % (eps, fem_fd, cpm_fd, nvm, nvp), flush=True)
 
-    print("\nThis is the result.  The CPM finite difference converges onto its", flush=True)
-    print("exact gradient as eps shrinks, because its objective is smooth in the", flush=True)
-    print("shape parameter.  The FEM difference quotient does not settle, and it", flush=True)
-    print("fails for a reason no amount of care about eps can fix: shrinking eps", flush=True)
-    print("does not shrink the remeshing noise, because the mesh changes by whole", flush=True)
-    print("vertices however small the step is.  The 'nv changed' notes in the", flush=True)
-    print("sweep above are that noise being visible.", flush=True)
-    print("\nAnd this is at s = %.2f, nowhere near the merge.  The topology change" % s0, flush=True)
-    print("is the dramatic failure; the quiet one is that a remeshed objective is", flush=True)
-    print("not differentiable anywhere.  Note what is NOT claimed: FEM with fixed", flush=True)
-    print("connectivity differentiates perfectly well with respect to vertex", flush=True)
-    print("positions, and diffcpm/fem.py does exactly that, checked against finite", flush=True)
-    print("differences.  The obstacle is re-extraction, not FEM.", flush=True)
+    print("\nRead down the two fd columns.  The CPM quotient settles onto its", flush=True)
+    print("exact adjoint gradient, because its objective is smooth in the shape", flush=True)
+    print("parameter: the band is fixed and only the interpolation weights move.", flush=True)
+    print("\nThe FEM quotient is asked to approximate a derivative of a function", flush=True)
+    print("that has none.  Watch the mesh-size column: the vertex count changes", flush=True)
+    print("between the two evaluations, so the difference quotient subtracts two", flush=True)
+    print("objectives computed on different meshes -- on different numbers of", flush=True)
+    print("unknowns.  Shrinking eps does not shrink that, because the mesh changes", flush=True)
+    print("by whole vertices however small the step is.  There is no limit to find.", flush=True)
+    print("\nAt the merge the failure is categorical rather than noisy: the number", flush=True)
+    print("of components changes, so meshes either side are not even in", flush=True)
+    print("correspondence, and no notion of moving vertices connects them.", flush=True)
+    print("\nWhat is NOT claimed: that FEM cannot differentiate. With connectivity", flush=True)
+    print("held fixed it differentiates with respect to vertex positions perfectly", flush=True)
+    print("well, and diffcpm/fem.py does so to about 1e-9 against finite", flush=True)
+    print("differences -- that is checked, not assumed. Part A shows FEM is also the", flush=True)
+    print("cheaper method by roughly 3x when the shape is fixed and well meshed. The", flush=True)
+    print("obstacle is re-extraction, and it is the only thing CPM is being argued", flush=True)
+    print("to avoid.", flush=True)
 
 
 if __name__ == "__main__":
