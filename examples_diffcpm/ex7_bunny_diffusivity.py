@@ -38,7 +38,7 @@ jax.config.update("jax_enable_x64", True)
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-from diffcpm.grid import band_from_cp, make_grid1d
+from diffcpm.grid import band_from_cp, band_from_dist, make_grid1d
 from diffcpm.interp import InterpPattern
 from diffcpm.inverse import Observer, check_gradient, lbfgs, misfit
 from diffcpm.mesh import load_bunny
@@ -50,7 +50,12 @@ C_TRUE = np.array([0.20, 0.35, -0.25, 0.30])
 NSENSOR = 120
 NOISE = 2e-3
 DX_LIST = (0.12, 0.09, 0.07)
-DX_FINE = 0.05
+# The data-generating grid must be clearly finer than every grid we invert on,
+# or its discretization error barely differs from theirs and the refinement study
+# is measuring the inverse crime again. 0.035 is 2x finer than the finest
+# inversion grid; an earlier run used 0.05, only 1.4x, which is not enough
+# separation to argue from.
+DX_FINE = 0.035
 NEWTON = dict(projection_steps=8, newton_iters=25, damping=1e-10, n_backtrack=6)
 SIREN_CACHE = os.path.join(_ROOT, "scripts", "bunny_siren.pkl")
 
@@ -60,11 +65,35 @@ def basis_of(pts):
     return jnp.stack([jnp.ones(pts.shape[0]), pts[:, 0], pts[:, 1], pts[:, 2]], 1)
 
 
-def make_grid(mesh, dx):
+def make_grid(mesh, dx, kind="mesh", params=None, extra_bw=0.0):
+    """Band for one geometry.
+
+    Each geometry gets a band built from *its own* surface.  Building the learned
+    surface's band from the mesh looks harmless and is not: a SIREN with 0.008 rms
+    signed-distance error still puts its zero level set as much as 0.7 away from
+    the mesh at a few points, which is more than a band half-width, so the learned
+    surface pokes out of a mesh-built band and the run is garbage (field error
+    865% in an earlier attempt, with an interpolation violation to prove it).
+
+    For the learned surface the distance is taken as ``|f|`` rather than from a
+    closest point solve: the network is trained to be a signed distance function,
+    so ``|grad f|`` is close to 1, and one forward pass per grid point is affordable
+    where a Newton solve over the whole grid is not.  It is an estimate, so it is
+    checked afterwards by ``violations`` and ``clearance`` on the real closest
+    points rather than trusted.
+    """
     x1d = [make_grid1d(-1.25, 1.25, dx), make_grid1d(-1.25, 1.25, dx),
            make_grid1d(-1.0, 1.0, dx)]
-    return band_from_cp(x1d, lambda p: mesh.closest_point(p, k=24, exact=False),
-                        p=3, stenrad=1, chunk=60000)
+    if kind == "mesh":
+        return band_from_cp(x1d, lambda p: mesh.closest_point(p, k=24, exact=False),
+                            p=3, stenrad=1, chunk=60000, extra_bw=extra_bw)
+
+    def dist(pts):
+        f = jax.vmap(siren_apply, in_axes=(None, 0))(params, jnp.asarray(pts))
+        return np.abs(np.asarray(f))
+
+    return band_from_dist(x1d, dist, p=3, stenrad=1, chunk=60000,
+                          extra_bw=extra_bw)
 
 
 def geometry(kind, mesh, grid, params, dx):
@@ -91,8 +120,8 @@ def forward(c, grid, pattern, cp, basis, f, method):
                           restart=250)
 
 
-def setup(kind, mesh, params, dx, sensors):
-    grid = make_grid(mesh, dx)
+def setup(kind, mesh, params, dx, sensors, extra_bw=1.0):
+    grid = make_grid(mesh, dx, kind=kind, params=params, extra_bw=extra_bw)
     pattern = InterpPattern(grid)
     cp, fail = geometry(kind, mesh, grid, params, dx)
     viol = pattern.violations(cp)
@@ -125,8 +154,8 @@ def main():
           % (mesh.n_faces,
              np.round(mesh.verts.max(0) - mesh.verts.min(0), 3), 9.43))
     if not os.path.exists(SIREN_CACHE):
-        print("\nNo SIREN weights at %s" % SIREN_CACHE)
-        print("Run scripts/fit_bunny_siren.py first (about 5 minutes on CPU).")
+        print("\nNo SIREN weights at %s" % SIREN_CACHE, flush=True)
+        print("Run scripts/fit_bunny_siren.py first (about 5 minutes on CPU).", flush=True)
         return 1
     params = jax.tree_util.tree_map(jnp.asarray,
                                     pickle.load(open(SIREN_CACHE, "rb")))
@@ -147,9 +176,9 @@ def main():
 
     results = {}
     for kind in ("mesh", "siren"):
-        print("\n" + "=" * 76)
-        print("geometry: %s" % kind)
-        print("=" * 76)
+        print("\n" + "=" * 76, flush=True)
+        print("geometry: %s" % kind, flush=True)
+        print("=" * 76, flush=True)
 
         # data on a finer grid of THIS geometry -- no inverse crime
         t0 = time.time()
@@ -163,9 +192,13 @@ def main():
               % (DX_FINE, fine["grid"].n, 100 * fine["fail"],
                  float(jnp.sqrt(jnp.mean(clean ** 2))), time.time() - t0))
 
-        print("\n%-7s %-8s %-8s %-7s %-11s %-11s %-9s %s"
-              % ("dx", "band n", "fail%", "viol", "J", "||dc||",
-                 "max da/a", "time"))
+        floor = 0.5 * NSENSOR
+        print("\nJ's expected noise floor is %.0f. J well above it means model "
+              "error,\nnot sensor noise, is what the fit is up against." % floor,
+              flush=True)
+        print("\n%-7s %-8s %-7s %-6s %-10s %-8s %-11s %-10s %s"
+              % ("dx", "band n", "fail%", "viol", "J", "J/floor", "||dc||",
+                 "field err", "time"), flush=True)
         prev = None
         for dx in DX_LIST:
             c_hat, res, st, dt = run_one(kind, mesh, params, dx, sensors, data)
@@ -173,22 +206,24 @@ def main():
             a_tru = np.exp(np.asarray(st["basis"] @ jnp.asarray(C_TRUE)))
             rel = np.abs(a_hat - a_tru).max() / a_tru.max()
             step = "" if prev is None else "  d(prev) %.4f" % np.linalg.norm(c_hat - prev)
-            print("%-7.3f %-8d %-8.2f %-7d %-11.4e %-11.4e %-9.4f %.0fs%s"
+            print("%-7.3f %-8d %-7.2f %-6d %-10.4e %-8.1f %-11.4e %-10.4f %.0fs%s"
                   % (dx, st["grid"].n, 100 * st["fail"], st["viol"], res.fun,
-                     np.linalg.norm(c_hat - C_TRUE), rel, dt, step))
+                     res.fun / floor, np.linalg.norm(c_hat - C_TRUE), rel, dt,
+                     step), flush=True)
             prev = c_hat
             results[(kind, dx)] = c_hat
+            results[(kind, dx, "field")] = rel
 
-        print("\n   coefficients at dx = %.3f" % DX_LIST[-1])
+        print("\n   coefficients at dx = %.3f" % DX_LIST[-1], flush=True)
         print("   %-10s %s" % ("basis", " ".join("%8s" % n
                                                  for n in ("1", "x", "y", "z"))))
-        print("   %-10s %s" % ("true", " ".join("%+8.4f" % v for v in C_TRUE)))
+        print("   %-10s %s" % ("true", " ".join("%+8.4f" % v for v in C_TRUE)), flush=True)
         print("   %-10s %s" % ("recovered",
                                " ".join("%+8.4f" % v for v in results[(kind, DX_LIST[-1])])))
 
-    print("\n" + "=" * 76)
-    print("what the learned surface costs")
-    print("=" * 76)
+    print("\n" + "=" * 76, flush=True)
+    print("what the learned surface costs", flush=True)
+    print("=" * 76, flush=True)
     print("%-7s %-14s %-14s %s" % ("dx", "||dc|| mesh", "||dc|| siren",
                                    "||c_siren - c_mesh||"))
     for dx in DX_LIST:
@@ -196,10 +231,24 @@ def main():
         print("%-7.3f %-14.4e %-14.4e %.4e"
               % (dx, np.linalg.norm(cm - C_TRUE), np.linalg.norm(cs - C_TRUE),
                  np.linalg.norm(cs - cm)))
-    print("\nRead the d(prev) column for convergence: successive refinements")
-    print("should move the answer less and less.  The mesh rows isolate")
-    print("discretization; the siren rows add the learned surface on top, and the")
-    print("last table is the difference between them.")
+    print("\n%-7s %-16s %s" % ("dx", "field err mesh", "field err siren"),
+          flush=True)
+    for dx in DX_LIST:
+        print("%-7.3f %-16.4f %.4f"
+              % (dx, results[("mesh", dx, "field")],
+                 results[("siren", dx, "field")]), flush=True)
+
+    print("\nRead the two error measures separately, because they disagree and", flush=True)
+    print("the disagreement is the finding.  The field error is the physical", flush=True)
+    print("quantity: how wrong the recovered diffusivity is pointwise, relative", flush=True)
+    print("to its scale.  ||dc|| is the error in the four basis coefficients.", flush=True)
+    print("The field error can fall steadily while ||dc|| moves around, because", flush=True)
+    print("the four coefficients are not equally determined by the data and can", flush=True)
+    print("trade against one another at nearly constant misfit.  Quoting only", flush=True)
+    print("||dc|| would read as non-convergence; quoting only the field error", flush=True)
+    print("would hide that the coefficients are ill-conditioned.", flush=True)
+    print("\nThe mesh rows isolate discretization error.  The siren rows add the", flush=True)
+    print("learned surface on top, and the comparison table is the difference.", flush=True)
     return 0
 
 

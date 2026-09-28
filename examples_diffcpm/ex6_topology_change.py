@@ -154,13 +154,13 @@ def solve_for(s, grid, pattern, method, cp=None):
 
 
 def part_a():
-    print("=" * 76)
-    print("A  sweep the shape through the merge (exact merge at s = %.4f)" % S_MERGE)
-    print("=" * 76)
+    print("=" * 76, flush=True)
+    print("A  sweep the shape through the merge (exact merge at s = %.4f)" % S_MERGE, flush=True)
+    print("=" * 76, flush=True)
     grid = build_band(DX, S_TRUE, S_INIT)
     pattern = InterpPattern(grid)
-    print("grid %s, band %d points, dx %.3f" % (grid.shape, grid.n, DX))
-    print()
+    print("grid %s, band %d points, dx %.3f" % (grid.shape, grid.n, DX), flush=True)
+    print(flush=True)
     print("%-8s %-7s %-8s %-11s %-10s %-11s %s"
           % ("s", "cmpts", "topology", "solve resid", "clearance", "|f(cp)| max",
              "J-ish |u|max"))
@@ -174,19 +174,19 @@ def part_a():
         print("%-8.4f %-7d %-8s %-11.2e %-10.3f %-11.2e %.4f"
               % (s, nc, "merged" if nc == 1 else "split", resid, clear, fmax,
                  float(jnp.abs(u).max())))
-    print()
-    print("The component count is the mesh pipeline's problem in one column: it")
-    print("steps from 2 to 1, and a mesh built on either side has different")
-    print("connectivity, so a vertex-position gradient cannot cross that row.")
-    print("The solver's residual and the closest point residual do not notice the")
-    print("event at all -- nothing is rebuilt, so there is nothing to break.")
+    print(flush=True)
+    print("The component count is the mesh pipeline's problem in one column: it", flush=True)
+    print("steps from 2 to 1, and a mesh built on either side has different", flush=True)
+    print("connectivity, so a vertex-position gradient cannot cross that row.", flush=True)
+    print("The solver's residual and the closest point residual do not notice the", flush=True)
+    print("event at all -- nothing is rebuilt, so there is nothing to break.", flush=True)
 
 
 def part_b():
-    print()
-    print("=" * 76)
-    print("B  recover the shape parameter across the merge")
-    print("=" * 76)
+    print(flush=True)
+    print("=" * 76, flush=True)
+    print("B  recover the shape parameter across the merge", flush=True)
+    print("=" * 76, flush=True)
     grid = build_band(DX, S_TRUE, S_INIT)
     pattern = InterpPattern(grid)
     observer = Observer(grid)
@@ -217,7 +217,7 @@ def part_b():
         u, _, _, _ = solve_for(sv[0], grid, pattern, "gmres")
         return misfit(observer(u, sensors), data, sigma=NOISE)
 
-    print("\ngradient check at the initial (split) shape s = %.3f:" % S_INIT)
+    print("\ngradient check at the initial (split) shape s = %.3f:" % S_INIT, flush=True)
     for ana, fd, rel, e in check_gradient(objective, jnp.array([S_INIT]),
                                           directions=jnp.array([[1.0]])):
         print("   analytic %+.8e   fd %+.8e   rel %.2e  (eps %.0e)"
@@ -226,7 +226,7 @@ def part_b():
     trace = []
     s_hat, res = lbfgs(objective, jnp.array([S_INIT]), maxiter=60,
                        callback=lambda z: trace.append(float(z[0])))
-    print("\n%-6s %-10s %-9s %-12s %s" % ("iter", "s", "topology", "J", "crossed?"))
+    print("\n%-6s %-10s %-9s %-12s %s" % ("iter", "s", "topology", "J", "crossed?"), flush=True)
     prev_split = S_INIT > S_MERGE
     for i, sv in enumerate(trace):
         nc = n_components(sv)
@@ -238,7 +238,7 @@ def part_b():
     print("%-6s %-10.6f %-9s %-12.5e" % ("final", s_hat[0],
                                          "merged" if n_components(float(s_hat[0])) == 1
                                          else "split", res.fun))
-    print("%-6s %-10.6f" % ("true", S_TRUE))
+    print("%-6s %-10.6f" % ("true", S_TRUE), flush=True)
     print("\n   error %+.2e   L-BFGS iters %d, evals %d"
           % (float(s_hat[0]) - S_TRUE, res.nit, res.nfev))
     started_split = n_components(S_INIT) == 2
