@@ -48,7 +48,7 @@ from diffcpm.grid import band_from_dist, make_grid1d
 from diffcpm.interp import InterpPattern
 from diffcpm.inverse import Observer, check_gradient, lbfgs, misfit
 from diffcpm.operators import build_operator
-from diffcpm.sdf import cp_level_set, level_set_residual_norm
+from diffcpm.sdf import cp_level_set, level_set_residuals
 from diffcpm.solve import solve_operator
 
 R = 0.6          # circle radius
@@ -140,17 +140,34 @@ def build_band(dx, s_lo, s_hi, n_s=9, extra_bw=3.0):
 # than a learned SDF: with these settings the residuals come out at 1e-16. Kept
 # lean because every distinct traced function recompiles, and the closest point
 # solve dominates the graph.
-NEWTON = dict(projection_steps=10, newton_iters=12, damping=1e-12,
-              n_backtrack=2, max_step=4 * DX)
+# The merged shape is harder than the split one: near the seam the smooth union
+# has a saddle and the closest point problem is genuinely ill conditioned. The
+# leaner settings that gave 1e-16 residuals on two separate circles left |f(cp)|
+# at 1e-1 once merged, so these come from that measurement rather than taste.
+NEWTON = dict(projection_steps=12, newton_iters=30, damping=1e-11,
+              n_backtrack=5, max_step=4 * DX)
 
 
-def solve_for(s, grid, pattern, method, cp=None):
-    if cp is None:
-        cp = cp_level_set(level_set, s, jnp.asarray(grid.xg), **NEWTON)
-    op = build_operator(grid, cp, alpha=-1.0, c=1.0, pattern=pattern)
-    b = 1.0 + cp[:, 0] + 0.25 * cp[:, 1]
-    u = solve_operator(op, b, method=method, tol=1e-13, maxiter=1500, restart=250)
-    return u, cp, op, b
+def make_solver(grid, pattern, method="gmres"):
+    """A jitted map from the shape parameter to the solution on this band.
+
+    Compiled once per band and reused.  Without it every evaluation retraces the
+    whole closest point solve plus GMRES: the first version of this script took
+    about 140 seconds per shape and ran out of time partway through part B.
+    """
+    xg = jnp.asarray(grid.xg)
+
+    @jax.jit
+    def solve(s):
+        cp = cp_level_set(level_set, s, xg, **NEWTON)
+        op = build_operator(grid, cp, alpha=-1.0, c=1.0, pattern=pattern)
+        b = 1.0 + cp[:, 0] + 0.25 * cp[:, 1]
+        u = solve_operator(op, b, method=method, tol=1e-13, maxiter=1500,
+                           restart=250)
+        resid = jnp.linalg.norm(op.matvec(u) - b) / jnp.linalg.norm(b)
+        return u, cp, resid
+
+    return solve
 
 
 def part_a():
@@ -161,25 +178,40 @@ def part_a():
     pattern = InterpPattern(grid)
     print("grid %s, band %d points, dx %.3f" % (grid.shape, grid.n, DX), flush=True)
     print(flush=True)
-    print("%-8s %-7s %-8s %-11s %-10s %-11s %s"
+    solve = make_solver(grid, pattern)
+    print("%-8s %-7s %-8s %-11s %-10s %-11s %-10s %s"
           % ("s", "cmpts", "topology", "solve resid", "clearance", "|f(cp)| max",
-             "J-ish |u|max"))
+             "cp fail %", "|u|max"), flush=True)
     for s in np.linspace(S_INIT, S_TRUE, 13):
-        u, cp, op, b = solve_for(float(s), grid, pattern, "gmres")
-        resid = float(jnp.linalg.norm(op.matvec(u) - b) / jnp.linalg.norm(b))
-        fmax, _ = level_set_residual_norm(level_set, float(s),
-                                          jnp.asarray(grid.xg), cp)
+        u, cp, resid = solve(float(s))
+        fv, sn = level_set_residuals(level_set, float(s), jnp.asarray(grid.xg), cp)
+        fail = float(np.mean((np.asarray(fv) > 1e-10) | (np.asarray(sn) > 1e-8)))
         clear = grid.clearance(lambda pts, s=float(s): approx_dist(s, pts))
         nc = n_components(float(s))
-        print("%-8.4f %-7d %-8s %-11.2e %-10.3f %-11.2e %.4f"
-              % (s, nc, "merged" if nc == 1 else "split", resid, clear, fmax,
-                 float(jnp.abs(u).max())))
+        print("%-8.4f %-7d %-8s %-11.2e %-10.3f %-11.2e %-10.2f %.4f"
+              % (s, nc, "merged" if nc == 1 else "split", float(resid), clear,
+                 float(jnp.max(fv)), 100 * fail, float(jnp.abs(u).max())),
+              flush=True)
+    print(flush=True)
+    print("There are two separate things in this table and they say different", flush=True)
+    print("things.  An earlier version of this script claimed both were untouched", flush=True)
+    print("by the merge; only the first one is.", flush=True)
     print(flush=True)
     print("The component count is the mesh pipeline's problem in one column: it", flush=True)
     print("steps from 2 to 1, and a mesh built on either side has different", flush=True)
-    print("connectivity, so a vertex-position gradient cannot cross that row.", flush=True)
-    print("The solver's residual and the closest point residual do not notice the", flush=True)
-    print("event at all -- nothing is rebuilt, so there is nothing to break.", flush=True)
+    print("connectivity, so a gradient with respect to vertex positions cannot", flush=True)
+    print("cross that row.  The linear solve does not react to it at all -- the", flush=True)
+    print("residual stays near 2e-13 on both sides and the band keeps full", flush=True)
+    print("clearance.  Nothing is rebuilt, so nothing breaks, and that is the", flush=True)
+    print("claim this experiment exists to support.", flush=True)
+    print(flush=True)
+    print("The closest point columns are a different matter.  The merged shape is", flush=True)
+    print("harder: near the seam the smooth union has a saddle, points there sit", flush=True)
+    print("close to the medial axis, and the closest point is ill conditioned", flush=True)
+    print("rather than merely awkward.  With leaner Newton settings |f(cp)| went", flush=True)
+    print("from 1e-16 while split to 1e-1 once merged.  So the honest summary is", flush=True)
+    print("that a topology change costs the solver nothing and does ask more of", flush=True)
+    print("the geometry side.", flush=True)
 
 
 def part_b():
@@ -207,14 +239,16 @@ def part_b():
     fine_pat = InterpPattern(fine)
     fine_obs = Observer(fine)
     assert fine_obs.violations(sensors) == 0
-    u_f, _, _, _ = solve_for(S_TRUE, fine, fine_pat, "gmres")
+    u_f, _, _ = make_solver(fine, fine_pat)(S_TRUE)
     clean = fine_obs(u_f, sensors)
     data = clean + NOISE * jnp.asarray(rng.standard_normal(sensors.shape[0]))
     print("data generated at dx = %.3f (band %d), signal rms %.4f"
           % (DX_FINE, fine.n, float(jnp.sqrt(jnp.mean(clean ** 2)))))
 
+    solve = make_solver(grid, pattern)
+
     def objective(sv):
-        u, _, _, _ = solve_for(sv[0], grid, pattern, "gmres")
+        u, _, _ = solve(sv[0])
         return misfit(observer(u, sensors), data, sigma=NOISE)
 
     print("\ngradient check at the initial (split) shape s = %.3f:" % S_INIT, flush=True)
