@@ -34,8 +34,8 @@ def _gmres_solve(matvec, b, tol, atol, restart, maxiter):
     return x
 
 
-def linear_solve(matvec, b, *, method="auto", tol=1e-12, atol=0.0, restart=60,
-                 maxiter=200, dense_limit=2500):
+def linear_solve(matvec, b, *, method="auto", tol=1e-12, atol=0.0, restart=50,
+                 maxiter=400, dense_limit=2500):
     """Solve ``A u = b`` with a solve that differentiates by the adjoint.
 
     ``method``:
@@ -50,6 +50,17 @@ def linear_solve(matvec, b, *, method="auto", tol=1e-12, atol=0.0, restart=60,
     It is not the fast path -- on a 2D band of ~1000 unknowns GMRES is around 6x
     quicker per value-and-gradient, and agrees to every printed digit -- so pass
     ``method="gmres"`` explicitly once the gradients have been checked.
+
+    **``restart`` is paid in full on every call.**  ``solve_method="batched"``
+    builds the entire restart-sized Krylov basis whether or not the residual
+    already fell after twenty vectors, so ``restart`` is a cost rather than a
+    budget.  Measured on a 2,137-point 2D band: ``restart=250`` cost 147 s per
+    forward solve and 270 s per value-and-gradient, against 3.3 s and 6.6 s at
+    ``restart=50``, for the same 1.8e-13 residual.  A factor of 44 for nothing,
+    and it silently dominated every example in this package until it was measured.
+    Raise ``maxiter``, not ``restart``, when a problem needs more iterations;
+    raise ``restart`` only if the outer iteration stalls, which is the
+    convergence that restarting gives up.
     """
     n = b.shape[0]
     if method == "auto":

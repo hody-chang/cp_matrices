@@ -143,8 +143,9 @@ def part_b():
         # Matrix-free GMRES rather than dense LU: at this size it is ~6x faster
         # per value-and-gradient and agrees with dense to every printed digit
         # (tests/test_diffcpm.py::test_gmres_and_dense_agree_including_gradients).
-        return solve_operator(op, b, method="gmres", tol=1e-13, maxiter=1500,
-                              restart=250)
+        # restart is a per-call cost, not a budget -- see diffcpm/solve.py.
+        return solve_operator(op, b, method="gmres", tol=1e-13, maxiter=600,
+                              restart=50)
 
     clean = observer(forward(jnp.asarray(AXES_TRUE)), sensors)
     noisy = clean + NOISE * jnp.asarray(rng.standard_normal(NSENSOR))
@@ -209,7 +210,7 @@ def part_b():
                              pattern=fine_pattern)
     fine_b = 1.0 + fine_cp[:, 0] + 0.5 * fine_cp[:, 1] ** 2
     fine_u = solve_operator(fine_op, fine_b, method="gmres", tol=1e-13,
-                            maxiter=1500, restart=250)
+                            maxiter=600, restart=50)
     fine_data = fine_obs(fine_u, sensors)
     axes_fine, res_fine = lbfgs(make_objective(fine_data, NOISE),
                                 jnp.asarray(AXES_INIT), maxiter=80)

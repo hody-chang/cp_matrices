@@ -49,13 +49,19 @@ from diffcpm.solve import solve_operator
 C_TRUE = np.array([0.20, 0.35, -0.25, 0.30])
 NSENSOR = 120
 NOISE = 2e-3
-DX_LIST = (0.12, 0.09, 0.07)
-# The data-generating grid must be clearly finer than every grid we invert on,
-# or its discretization error barely differs from theirs and the refinement study
-# is measuring the inverse crime again. 0.035 is 2x finer than the finest
-# inversion grid; an earlier run used 0.05, only 1.4x, which is not enough
-# separation to argue from.
-DX_FINE = 0.035
+DX_LIST = (0.12, 0.09, 0.07, 0.055)
+# The data-generating grid must be clearly finer than every grid we invert on, or
+# its discretization error barely differs from theirs and the refinement study is
+# measuring the inverse crime again. 0.0275 is 2x finer than the finest inversion
+# grid; an earlier run used 0.05 against a finest of 0.07, only 1.4x, which is not
+# enough separation to argue from.
+#
+# The fourth resolution is here because fixing the GMRES restart made it
+# affordable. The earlier study stopped at 0.07 and concluded "does not converge",
+# which is a weak conclusion from three points when the suspected cause is an
+# error floor -- the whole question is whether the error stops falling, and that
+# needs enough points to see a floor rather than a wobble.
+DX_FINE = 0.0275
 NEWTON = dict(projection_steps=8, newton_iters=25, damping=1e-10, n_backtrack=6)
 SIREN_CACHE = os.path.join(_ROOT, "scripts", "bunny_siren.pkl")
 
@@ -116,8 +122,11 @@ def geometry(kind, mesh, grid, params, dx):
 def forward(c, grid, pattern, cp, basis, f, method):
     a = jnp.exp(basis @ c)
     op = build_operator(grid, cp, alpha=a, c=-1.0, pattern=pattern)
-    return solve_operator(op, -f, method=method, tol=1e-11, maxiter=2000,
-                          restart=250)
+    # restart is a per-call cost, not a budget -- see diffcpm/solve.py. At 250
+    # every run in this file was about 40x slower than necessary for identical
+    # residuals, which is why the earlier refinement study stopped at dx = 0.07.
+    return solve_operator(op, -f, method=method, tol=1e-11, maxiter=800,
+                          restart=50)
 
 
 def setup(kind, mesh, params, dx, sensors, extra_bw=1.0):

@@ -162,8 +162,11 @@ def make_solver(grid, pattern, method="gmres"):
         cp = cp_level_set(level_set, s, xg, **NEWTON)
         op = build_operator(grid, cp, alpha=-1.0, c=1.0, pattern=pattern)
         b = 1.0 + cp[:, 0] + 0.25 * cp[:, 1]
-        u = solve_operator(op, b, method=method, tol=1e-13, maxiter=1500,
-                           restart=250)
+        # restart is a per-call cost, not a budget: at 250 this solve took 147 s
+        # and its gradient 270 s, against 3.3 s and 6.6 s at 50, for the same
+        # 1.8e-13 residual. See diffcpm/solve.py.
+        u = solve_operator(op, b, method=method, tol=1e-13, maxiter=600,
+                           restart=50)
         resid = jnp.linalg.norm(op.matvec(u) - b) / jnp.linalg.norm(b)
         return u, cp, resid
 

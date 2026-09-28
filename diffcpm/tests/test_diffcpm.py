@@ -657,7 +657,7 @@ def test_sphere_3d_forward():
     assert pat.violations(cp) == 0
     op = build_operator(grid, cp, alpha=-1.0, c=1.0, pattern=pat)
     u = solve_operator(op, 3.0 * cp[:, 2], method="gmres", tol=1e-12,
-                       maxiter=600, restart=200)
+                       maxiter=600, restart=50)
     near = np.abs(np.linalg.norm(grid.xg, axis=1) - 1.0) <= dx
     err = float(jnp.max(jnp.abs(u[near] - cp[near, 2])))
     assert err < 5e-2, err

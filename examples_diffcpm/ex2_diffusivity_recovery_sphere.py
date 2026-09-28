@@ -75,8 +75,9 @@ def main():
     def forward(c):
         a = jnp.exp(basis @ c)
         op = build_operator(grid, cp, alpha=a, c=-1.0, pattern=pattern)
+        # restart is a per-call cost, not a budget -- see diffcpm/solve.py.
         return solve_operator(op, -f, method=method, tol=1e-12, maxiter=800,
-                              restart=200)
+                              restart=50)
 
     a_true = np.exp(np.asarray(basis @ jnp.asarray(C_TRUE)))
     u_true = forward(jnp.asarray(C_TRUE))
