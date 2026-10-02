@@ -149,9 +149,12 @@
 % which is what example_curvature_mismatch_delta_kappa_convergence.m provides
 % with two circular arcs of independently chosen radii.
 
-% adjust as appropriate
-addpath('../cp_matrices');
-addpath('../surfaces');
+% Resolve dependencies relative to this example.
+here = fileparts(mfilename('fullpath'));
+addpath(here);
+addpath(fullfile(here, '..', '..', 'cp_matrices'));
+addpath(fullfile(here, '..', '..', 'surfaces'));
+addpath(fullfile(here, '..', 'surfaces'));
 
 
 %% Geometry, conventions, and the manufactured solution
@@ -212,7 +215,7 @@ dx_hist = 0.01;        % the grid size the iteration figure is drawn at
 [sigma, t_of_s] = arclength_map(a, b);
 L = sigma(2*pi);
 
-figdir = 'figs';   % .png output goes here
+figdir = fullfile(here, '..', 'figs');   % .png output goes here
 if ~exist(figdir, 'dir'), mkdir(figdir); end
 
 fprintf('ellipse a = %g, b = %g, c = %g, total length L = %.10f\n', a, b, c, L);

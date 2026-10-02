@@ -98,9 +98,11 @@
 % Run headlessly, from this directory:
 %   matlab -batch "example_curvature_mismatch_delta_kappa_convergence"
 
-% adjust as appropriate
-addpath('../cp_matrices');
-addpath('../surfaces');
+% Resolve dependencies relative to this example.
+here = fileparts(mfilename('fullpath'));
+addpath(here);
+addpath(fullfile(here, '..', '..', 'cp_matrices'));
+addpath(fullfile(here, '..', '..', 'surfaces'));
 
 
 %% Parameters
@@ -130,7 +132,7 @@ gluelabels = {'ideal E_* (arclength)', 'exact R', ...
               'rotation from d_k (pointwise)', 'rotation from d_{k2} (pointwise)'};
 nglue = numel(glues);
 
-figdir = 'figs';   % .png output goes here
+figdir = fullfile(here, '..', 'figs');   % .png output goes here
 
 
 %% Sweep delta_kappa, refine h at each

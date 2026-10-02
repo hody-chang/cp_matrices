@@ -18,11 +18,11 @@
 
 %% Using cp_matrices
 
-% Include the cp_matrices folder (edit as appropriate)
-addpath('../cp_matrices');
-
-% add functions for finding the closest points
-addpath('../surfaces');
+% Resolve dependencies relative to this example.
+here = fileparts(mfilename('fullpath'));
+addpath(here);
+addpath(fullfile(here, '..', '..', 'cp_matrices'));
+addpath(fullfile(here, '..', '..', 'surfaces'));
 
 
 global ICPM2009BANDINGCHECKS

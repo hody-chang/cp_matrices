@@ -1,13 +1,54 @@
-%% How far apart do the two halves put the SAME grid point?
+%% How far apart do the two halves put the SAME grid point?  (vGMM)
 %
-% Companion to example_ellipse_cut_tangent_schemes.m.  Same ellipse
+% Companion to example_ellipse_cut_branch_consistency.m.  Same ellipse
 %
 %     gamma(t) = cen + [a*cos(t), b*sin(t)],     cen = (0.5, 0.5),
 %
-% cut along y = ycut, same two-band iCPM, same three glue rotations
-% (d_k, d_k2, exact R), same manufactured solution and analytic
-% right-hand side for  u - laplacian_S u = f.  What is measured is
-% different.
+% cut along y = ycut, same three glue rotations (d_k, d_k2, exact R),
+% same manufactured solution and analytic right-hand side for
+% u - laplacian_S u = f, same four measures.  What changes is the
+% discrete operator the two halves are glued into.
+%
+% THE OPERATOR.  The companion script uses the implicit CPM, the
+% diagonal split of [Macdonald & Ruuth 2009],
+%
+%     M_icpm = diag(L) + (L - diag(L))*E,
+%
+% which applies the Cartesian Laplacian to the EXTENDED values, L*(E u),
+% and pulls the diagonal back out for stability.  That needs two bands:
+% E is read on an outer band and L lands back on an inner one, with a
+% restriction R between them.
+%
+% Here it is the embedded method-of-lines operator of [vGMM 2013],
+%
+%     M_vgmm = E*L - gamma*(I - E),     gamma = 2*dim/dx^2,
+%
+% which is the other ordering.  The Laplacian acts on the band values,
+% the RESULT is extended, and the penalty term -gamma*(I - E) is what
+% holds u constant along the normals.  E and L are both square on ONE
+% band, so there is no inner/outer split and no restriction here.
+%
+% The two are closer than they look, and it is worth saying which
+% difference is the real one.  lapsharp_unordered(L, E, R, delta) with
+% delta = 2*dim/dx^2 is NOT this operator: since the standard Laplacian
+% has a constant diagonal, delta = -diag(L) and L*E - delta*(I - R*E) is
+% algebraically the diagonal split all over again.  What makes this a
+% different method is the ordering E*L, and with it the single band.
+%
+% THE GLUE is unchanged, and needs no new machinery.  A row whose
+% closest point on its own half is a cut point is rotated about that
+% point and interpolated on the other half, exactly as before, which
+% puts its weights in the off-diagonal block E_{k,o}.  Both places E
+% appears then pick the glue up on their own: L is block diagonal, so
+% (E*L)_{k,o} = E_{k,o}*L_o extends the OTHER half's L u across the cut,
+% and the penalty row u_i - (E u)_i becomes the statement that half k's
+% value at a rotated node is half o's interpolant there.
+%
+% One degree p = 3 is used for both the E in E*L and the E in the
+% penalty, so that p, bw, the grid and the manufactured solution are all
+% exactly what the companion script uses and the operator is the only
+% thing that moved.  [vGMM 2013] and Theorem 6.1 of [MMC 2026] use two,
+% E_1*L - gamma*(I - E_3); that split is a separate experiment.
 %
 % TWO MANIFOLDS, chosen by the flag "flipped":
 %
@@ -27,22 +68,32 @@
 % 1-manifold: same total length, same arclength parameter, same intrinsic
 % geometry.
 %
-% THREE ROTATION GLUES compare tangent information at a genuine corner.
-% A row clamped to a cut point is turned about that point so its outward
-% tangent lands on the negative outward tangent of the other branch.  The
-% variants use d_k, d_k2, and the analytic tangent, respectively.  On the
-% reflected ellipse rigid rotation preserves Euclidean offsets rather than
-% the target branch's arclength continuation, so its surface error is a
-% useful consistency diagnostic even with exact tangents.
+% Two things here are not node-for-node comparable with the companion
+% script, both because there is one band instead of two.  gap and allgap
+% range over the overlap of the two FULL bands, since that is where the
+% unknowns live now and the iCPM inner band is a subset of it.  And
+% cp_tangent averages over the band nodes clamped to a cut point rather
+% than the outer-band ones, which is again the set the method actually
+% rotates.  Same measures on slightly larger node sets: the rates are
+% comparable, the individual numbers are not identical.
 %
-% The right-hand side at a glued row now uses f at the parameter the glue
-% delivers, not f at the cut point.  A row that stands for u somewhere
-% must be asked to satisfy the equation there; the difference is O(dx) at
-% O(1) rows, which moves the constant and not the rate.
+%
+% References
+%
+% # [vGMM 2013]  Ingrid von Glehn, Thomas Marz, and Colin B. Macdonald.
+%   An embedded method-of-lines approach to solving partial
+%   differential equations on surfaces.  2013.
+% # [MMC 2026]  Thomas Marz, Colin B. Macdonald, and Yujia Chen.
+%   Consistency and stability of closest point iterations.  Draft.
+% # examples/example_hole_ellipse.m is the in-repo template for the
+%   steady vGMM solve, M = E*L - gamma*(I-E) on a single band.
 
-% adjust as appropriate
-addpath('../cp_matrices');
-addpath('../surfaces');
+% Resolve dependencies relative to this example.
+here = fileparts(mfilename('fullpath'));
+addpath(here);
+addpath(fullfile(here, '..', '..', 'cp_matrices'));
+addpath(fullfile(here, '..', '..', 'surfaces'));
+addpath(fullfile(here, '..', 'surfaces'));
 
 
 %% Parameters
@@ -78,25 +129,16 @@ else
   ycut_list = [0.5 0.3];
 end
 
-% Five levels, stopping at dx = 1.25e-3, which is where this
-% discretization runs out of arithmetic.  A degree-3 interpolation weight
-% built from coordinates of size X carries ~eps*X/dx of rounding and the
-% Laplacian divides by dx^2, so the solution error picks up a floor
-%
-%     ~eps*X/dx^3  =  2e-7 at dx = 1.25e-3,  2e-6 at half that,
-%
-% and past that every column turns and RISES: 1e-5 at dx = 3.1e-4 and 6e-5
-% at dx = 1.6e-4, all six columns landing on the same number.  It is not
-% the glue -- the uncut baseline on the plain ellipse, which glues nothing,
-% hits those same values at those same dx.  The rotation columns stay above
-% the arithmetic floor over the configured levels.
-hvals = 0.02*2.^-(0:4);
+hvals = 0.02*2.^-(0:7);
 
 dim = 2;    % dimension
 p = 3;      % interpolation degree
 order = 2;  % Laplacian order
 % The formula for bw is found in [Ruuth & Merriman 2008] and the 1.0002
-% is a safety factor.
+% is a safety factor.  It is exactly what the single vGMM band needs:
+% the (order/2 + (p+1)/2) in the normal direction is the interpolation
+% stencil of a closest point plus one Laplacian stencil on top of it,
+% which is the composition E*L reads.
 bw = 1.0002*sqrt((dim-1)*((p+1)/2)^2 + ((order/2+(p+1)/2)^2));
 
 % A band point has a unique closest point only while bw*dx stays under the
@@ -109,16 +151,16 @@ end
 
 dx_show = min(0.05, 0.5/(bw*max(a/b^2, b/a^2)));
 
-figdir = 'figs';   % .png output goes here
+figdir = fullfile(here, '..', 'figs');   % .png output goes here
 
 if flipped
   exactlabel = 'exact R';
   % one band over the whole curve is no longer "exact" anything: it is
   % the closest point method applied to a corner as if it were smooth
-  baselabel = 'uncut CPM, corner ignored';
+  baselabel = 'uncut vGMM, corner ignored';
 else
   exactlabel = 'exact R = I';
-  baselabel = 'exact iCPM (uncut)';
+  baselabel = 'exact vGMM (uncut)';
 end
 varlabels = {'rotation from d_k', 'rotation from d_{k2}', exactlabel};
 nvar = length(varlabels);
@@ -206,23 +248,17 @@ for ci = 1:length(ycut_list)
   end
   thetaex = glue_angles(tauex{1}, tauex{2});
 
-  % The exact rotation depends only on the known endpoint tangents.
-  tauex3 = zeros(2,2,2);
-  tauex3(1,:,:) = tauex{1};
-  tauex3(2,:,:) = tauex{2};
-  glex_rot = make_glue_rot(tauex3);
-
-  err = nan(nvar+1, nh);    % surface L_inf error, baseline then rotations
-  gap = nan(nvar, nh);      % max |u_A - u_B| at shared rotated nodes
-  vtx = nan(nvar, nh);      % max |u_A(v) - u_B(v)| on the manifold
-  branch = nan(nvar, nh);   % max(|e_A|, |e_B|) at shared nodes
+  err = nan(nvar+1, nh);    % surface L_inf error, baseline then the three
+  gap = nan(nvar, nh);      % max |u_A - u_B| at the shared rotated nodes
+  vtx = nan(nvar, nh);      % max |u_A(v) - u_B(v)|, on the manifold
+  branch = nan(nvar, nh);   % max(|e_A|, |e_B|) at the same nodes
   allgap = nan(nvar, nh);   % the same gap over the whole overlap
   dcorner = nan(1, nh);     % where the baseline's worst point is
   nrot = nan(1, nh);        % how many shared rotated nodes there are
   nshare = nan(1, nh);      % how many shared nodes there are
-  thetamax = nan(2, nh);    % max angle-estimation error
+  thetamax = nan(2, nh);    % max |theta|, for reference
 
-  fprintf(['\n==== %s, cut at y = %g: sin t = %.4f, cut-point kappa = ' ...
+  fprintf(['\n==== vGMM, %s, cut at y = %g: sin t = %.4f, cut-point kappa = ' ...
            '%.4f ====\n'], geoname, yc, s0, kappa);
   fprintf('exact glue angle at the two cut points: %.4f, %.4f rad\n', ...
           thetaex(1,1), thetaex(1,2));
@@ -234,7 +270,7 @@ for ci = 1:length(ycut_list)
   for k = 1:nh
     dx = hvals(k);
 
-    %% Construct a grid, and the bands and operators of the two halves
+    %% Construct a grid, and the band and operators of the two halves
     [x1d, y1d, cand] = make_grid(geowhole.pieces, a, b, cen, dx, bw);
     br = cell(2,1);
     for j = 1:2
@@ -242,13 +278,13 @@ for ci = 1:length(ycut_list)
       br{j}.vid = vertex_ids(br{j}, V);
     end
 
-    %% Baseline: exact iCPM on the whole curve, one band, no cut
-    % On the ellipse this is the ordinary closest point method and the
-    % error the cut variants are trying to get back to.  On the flipped
-    % curve it is the closest point method applied to a corner as if the
-    % corner were not there, which is the other thing worth knowing.
+    %% Baseline: vGMM on the whole curve, one band, no cut
+    % On the ellipse this is the ordinary embedded method-of-lines solve
+    % and the error the cut variants are trying to get back to.  On the
+    % flipped curve it is that solve applied to a corner as if the corner
+    % were not there, which is the other thing worth knowing.
     swhole = setup_band(x1d, y1d, dx, p, order, bw, cand, geowhole);
-    outw = icpm_solve({swhole}, [], x1d, y1d, p, a, b, cen, ufun, ffun);
+    outw = vgmm_solve({swhole}, [], x1d, y1d, p, dim, a, b, cen, ufun, ffun);
     err(1,k) = outw.errsurf;
     % how far, in arclength, the baseline's worst point is from the
     % nearest cut point: the test of whether a corner is what hurts it
@@ -263,40 +299,34 @@ for ci = 1:length(ycut_list)
              'carried by the other; there is nothing to compare'], dx);
     end
 
-    %% Endpoint tangents and the three rotation glues
-    % thetamax is the error |theta - theta_exact|; on the flipped curve
-    % the exact angle is nonzero.
-    tauo = zeros(2, 2, 2, 3);    % (branch, cut point, component, scheme)
-    tauo(1,:,:,1) = tauex{1};    % exact, d_k, then d_k2
-    tauo(2,:,:,1) = tauex{2};
+    %% Endpoint tangents, and the glue rotation each scheme produces
+    % thetamax is now the error in the angle, |theta - theta_exact|, not
+    % |theta| itself: on the flipped curve the exact angle is not zero.
+    theta = zeros(2, 2, nvar);   % (branch, vertex, variant)
+    theta(:,:,nvar) = thetaex;   % the last variant is the exact rotation
     for scheme = 1:2
-      for jb = 1:2
-        for m = 1:2
-          tauo(jb,m,:,scheme+1) = cp_tangent(br{jb}, V(m,:), scheme);
-        end
-      end
-      th = glue_angles(squeeze(tauo(1,:,:,scheme+1)), ...
-                       squeeze(tauo(2,:,:,scheme+1)));
-      thetamax(scheme,k) = max(max(abs(wrapangle(th - thetaex))));
+      tauA = [cp_tangent(br{1}, V(1,:), scheme); ...
+              cp_tangent(br{1}, V(2,:), scheme)];
+      tauB = [cp_tangent(br{2}, V(1,:), scheme); ...
+              cp_tangent(br{2}, V(2,:), scheme)];
+      theta(:,:,scheme) = glue_angles(tauA, tauB);
+      thetamax(scheme,k) = ...
+          max(max(abs(wrapangle(theta(:,:,scheme) - thetaex))));
     end
-
-    glv = {make_glue_rot(squeeze(tauo(:,:,:,2))), ...
-           make_glue_rot(squeeze(tauo(:,:,:,3))), ...
-           glex_rot};
 
     %% Solve, once per variant, and compare the halves node by node
     for iv = 1:nvar
-      out = icpm_solve(br, glv{iv}, x1d, y1d, p, a, b, cen, ufun, ffun);
+      out = vgmm_solve(br, theta(:,:,iv), x1d, y1d, p, dim, a, b, cen, ...
+                       ufun, ffun);
       if (out.rowsum > 1e-10)
         error('extension matrix rows do not sum to one (%g)', out.rowsum);
       end
       err(iv+1,k) = out.errsurf;
-      % At a corner each unknown is compared with the exact rotation
-      % continuation it represents; the raw branch difference is not an
-      % error because the two routed reference parameters differ.
-      refA = sh.tA;  refB = sh.tB;
-      eA = out.ubr{1}(sh.i1) - ufun(refA);
-      eB = out.ubr{2}(sh.i2) - ufun(refB);
+      % each half against the value its own unknown stands for; on the
+      % plain ellipse those are the same number and eA - eB is just
+      % u_A - u_B
+      eA = out.ubr{1}(sh.i1) - ufun(sh.tA);
+      eB = out.ubr{2}(sh.i2) - ufun(sh.tB);
 
       gap(iv,k) = norm(eA(sh.rot) - eB(sh.rot), inf);
       branch(iv,k) = max(norm(eA(sh.rot), inf), norm(eB(sh.rot), inf));
@@ -309,13 +339,10 @@ for ci = 1:length(ycut_list)
       vtx(iv,k) = norm(uAv - uBv, inf);
     end
 
-    fprintf('dx = %-8.4g shared %-4d rot %-3d both %-3d dth %8.2e %8.2e', ...
-            dx, nshare(k), nrot(k), sh.nboth, thetamax(1,k), thetamax(2,k));
-    fprintf('   gap');
-    fprintf(' %9.3e', gap(:,k));
-    fprintf('   vtx');
-    fprintf(' %9.3e', vtx(:,k));
-    fprintf('\n');
+    fprintf(['dx = %-8.4g shared %-4d rot %-3d both %-3d dth %8.2e %8.2e   ' ...
+             'gap %9.3e %9.3e %9.3e   vtx %9.3e %9.3e %9.3e\n'], ...
+            dx, nshare(k), nrot(k), sh.nboth, ...
+            thetamax(1,k), thetamax(2,k), gap(:,k), vtx(:,k));
   end
 
   %% Convergence table
@@ -429,7 +456,8 @@ for ci = 1:length(ycut_list)
   % than any level in the convergence study -- the point is to see the
   % nodes, not the accuracy -- so this solve is for the picture only and
   % none of the numbers above come from it.
-  outshow = icpm_solve(brs, glex_rot, xs1d, ys1d, p, a, b, cen, ufun, ffun);
+  outshow = vgmm_solve(brs, thetaex, xs1d, ys1d, p, dim, a, b, cen, ...
+                       ufun, ffun);
   ushow = outshow.ubr;
   cl = [min([ushow{1}; ushow{2}]) max([ushow{1}; ushow{2}])];
 
@@ -445,12 +473,12 @@ for ci = 1:length(ycut_list)
   leftpanel(brs, ushow, cl, V, a, b, cen, yc, tv, dx_show, bw, kappa, geo, geoname);
   axes('Position', [0.56 0.13 0.40 0.74]);
   plotconv(hvals, err, rateerr, varlabels4, 'surface L_\infty error of u');
-  title({sprintf('u - \\Delta_S u = f on the cut curve (%s)', geoname), ...
+  title({sprintf('vGMM:  u - \\Delta_S u = f on the cut curve (%s)', geoname), ...
          sprintf('cut at y = %g, cut-point curvature \\kappa = %.3f', ...
                  yc, kappa)}, 'FontSize', 9);
   legend('Location', 'southeast', 'FontSize', 7);
   outfile = fullfile(figdir, ...
-                     sprintf('%s_cut_y_%g_error.png', geoname, yc));
+                     sprintf('%s_vgmm_cut_y_%g_error.png', geoname, yc));
   exportgraphics(gcf, outfile, 'Resolution', 150);
   fprintf('saved %s\n', outfile);
 
@@ -463,12 +491,12 @@ for ci = 1:length(ycut_list)
   axes('Position', [0.56 0.13 0.40 0.74]);
   plotgaps(hvals, {gap, vtx}, {rate, ratev}, varlabels, ...
            {'gap (nodes)', 'vtx (u at v)'});
-  title({'the two halves against each other', ...
+  title({'vGMM: the two halves against each other', ...
          sprintf('cut at y = %g, cut-point curvature \\kappa = %.3f', ...
                  yc, kappa)}, 'FontSize', 9);
   legend('Location', 'southeast', 'FontSize', 6, 'NumColumns', 2);
   outfile = fullfile(figdir, ...
-                     sprintf('%s_cut_y_%g_gaps.png', geoname, yc));
+                     sprintf('%s_vgmm_cut_y_%g_gaps.png', geoname, yc));
   exportgraphics(gcf, outfile, 'Resolution', 150);
   fprintf('saved %s\n', outfile);
 end
@@ -560,10 +588,10 @@ if (length(results) > 1)
   xticks(10.^(-6:1:-1));
   grid on; box on;
   xlabel('dx'); ylabel('max |u_A - u_B| at the rotated nodes');
-  title('the two halves disagreeing, at every cut height', 'FontSize', 9);
+  title('vGMM: the two halves disagreeing, at every cut height', 'FontSize', 9);
   legend(leg, 'Location', 'southwest', 'FontSize', 7);
 
-  outfile = fullfile(figdir, sprintf('%s_cut_summary.png', geoname));
+  outfile = fullfile(figdir, sprintf('%s_vgmm_cut_summary.png', geoname));
   exportgraphics(gcf, outfile, 'Resolution', 150);
   fprintf('saved %s\n\n', outfile);
 end
@@ -688,17 +716,45 @@ function th = glue_angles(tauA, tauB)
 end
 
 function sh = shared_points(br, V, geo, thetaex)
-%SHARED_POINTS Shared inner-band nodes and their exact-rotation references.
-% sh.tA and sh.tB are the arclength parameters represented by each branch
-% unknown after endpoint rows are routed by the analytic rotation.
+%SHARED_POINTS  the grid nodes carrying an unknown in BOTH halves
+%   With one band per half the unknowns are the band itself, stored as
+%   global linear indices into the grid, so the overlap is their
+%   intersection.  sh.rot marks the nodes at least one half clamps to a
+%   cut point, which is where the glue rotation acts.
+%
+%   On the plain ellipse that is always exactly one of the two halves:
+%   the arcs share a tangent line at the cut point, so they share a
+%   normal line there and their clamping regions are its two sides.  At a
+%   corner the two normals are different lines, and the wedges between
+%   them are clamped by both halves or by neither.  Both cases are
+%   ordinary -- a node clamped by both simply has two rotated rows -- and
+%   nothing below assumes otherwise.
+%
+%   The point of this function is sh.tA and sh.tB: the parameter each
+%   half's unknown at a shared node stands for.  For a half that is not
+%   clamping the node that is just the parameter of its own closest
+%   point.  For the half that IS clamping it, the glue does not extend by
+%   the constant u(v): it rotates the node about v by the EXACT angle and
+%   interpolates on the other arc, so the unknown stands for u there.
+%   On the plain ellipse the exact angle is zero and the two parameters
+%   coincide -- both halves are after the same number and the difference
+%   of the unknowns is itself the error.  At a corner they do not
+%   coincide, the raw difference is O(dx) whatever the scheme does, and
+%   what has to be compared is each half's own error.
+%
+%     sh.i1, sh.i2   positions in band 1 and band 2
+%     sh.tA, sh.tB   the parameter each half's unknown stands for
+%     sh.rot         clamped to a cut point by one of the two halves
+%     sh.vid         which cut point, where rot holds
+%     sh.x, sh.y     coordinates of the shared nodes
 
-  [~, i1, i2] = intersect(br{1}.innerband, br{2}.innerband);
+  [~, i1, i2] = intersect(br{1}.band, br{2}.band);
   sh.i1 = i1;
   sh.i2 = i2;
-  sh.x = br{1}.xin(i1);
-  sh.y = br{1}.yin(i1);
+  sh.x = br{1}.x(i1);
+  sh.y = br{1}.y(i1);
 
-  cp = {[br{1}.cpxin(i1) br{1}.cpyin(i1)], [br{2}.cpxin(i2) br{2}.cpyin(i2)]};
+  cp = {[br{1}.cpx(i1) br{1}.cpy(i1)], [br{2}.cpx(i2) br{2}.cpy(i2)]};
 
   % the same bit-for-bit test vertex_ids uses
   tol = 100*eps(max(1, max(abs(V(:)))));
@@ -804,12 +860,20 @@ end
 
 
 function s = setup_band(x1d, y1d, dx, p, order, bw, cand, geo)
-%SETUP_BAND  the two bands and the operators for one piece of curve
-%   Same construction as example_ellipse_cut_tangent_schemes.m, plus xin
-%   and yin: the coordinates of the inner-band nodes, which is where the
-%   unknowns live and so where the two halves are compared.  geo says
-%   which curve this is and how it is parametrized -- one arc for a half,
-%   both arcs for the uncut baseline.
+%SETUP_BAND  the band and the operators for one piece of curve
+%   One band, not two: vGMM applies L to the band values and extends the
+%   result, so both E and L are square on the same set of nodes and no
+%   restriction operator is needed.  The band is the usual one, the nodes
+%   within bw*dx of the curve, and every node of it carries an unknown.
+%   geo says which curve this is and how it is parametrized -- one arc
+%   for a half, both arcs for the uncut baseline.
+%
+%   s.lfull marks the rows of L whose whole stencil landed in the band.
+%   Rows near the outer edge of the band lose part of theirs, which is
+%   harmless as long as nothing reads them: in E*L a row of L is read
+%   only if E has a nonzero in that column, and the bw above is chosen
+%   precisely so those columns are interior.  That is checked here for E
+%   and again in vgmm_solve for the cross-cut blocks.
 
   cpf = geo.cpf;
 
@@ -829,88 +893,75 @@ function s = setup_band(x1d, y1d, dx, p, order, bw, cand, geo)
   yc = y1d(jc);
   [cpx, cpy, dist, bdy] = cpf(xc, yc);
 
-  % the initial band: the nodes within bw*dx of the arc
+  % the band: the nodes within bw*dx of the arc
   keep = abs(dist) <= bw*dx;
   band = cand(keep);
-  xinit = xc(keep);  yinit = yc(keep);
-  cpxinit = cpx(keep);  cpyinit = cpy(keep);
-  bdyinit = bdy(keep);
-
-  % the inner band is the set of columns the closest point interpolation
-  % touches
-  [Ei, Ej, Es] = interp2_matrix(x1d, y1d, cpxinit, cpyinit, p);
-  innerband = unique(Ej);
-  nin = length(innerband);
-  inv_inner = make_invbandmap(nx*ny, innerband);
-  Einit = sparse(Ei, inv_inner(Ej), Es, length(band), nin);
-
-  % the outer band is the set of columns the Laplacian on the inner band
-  % touches
-  Ltemp = laplacian_2d_matrix(x1d, y1d, order, innerband, band);
-  if (nnz(Ltemp) ~= sten*nin)
-    error('the Laplacian stencil of the inner band leaves the initial band');
-  end
-  [~, jj] = find(Ltemp);
-  outertemp = unique(jj);
-
-  [tf, loc] = ismember(innerband, band(outertemp));
-  if ~all(tf)
-    error('the inner band is not contained in the outer band');
-  end
+  n = length(band);
+  invband = make_invbandmap(nx*ny, band);
 
   s.geo = geo;
   s.cpf = cpf;
   s.dx = dx;
   s.band = band;
-  s.innerband = innerband;
-  s.outerband = band(outertemp);
-  s.inv_inner = inv_inner;
-  s.nin = nin;
-  s.nout = length(outertemp);
-  s.L = Ltemp(:, outertemp);
-  s.E = Einit(outertemp, :);
-  s.R = sparse(1:nin, loc, ones(nin,1), nin, s.nout);
-  s.xout = xinit(outertemp);
-  s.yout = yinit(outertemp);
-  s.cpxout = cpxinit(outertemp);
-  s.cpyout = cpyinit(outertemp);
-  s.bdyout = bdyinit(outertemp);
-  s.xin = s.R*s.xout;
-  s.yin = s.R*s.yout;
-  s.cpxin = s.R*s.cpxout;
-  s.cpyin = s.R*s.cpyout;
+  s.invband = invband;
+  s.n = n;
+  s.x = xc(keep);
+  s.y = yc(keep);
+  s.cpx = cpx(keep);
+  s.cpy = cpy(keep);
+  s.bdy = bdy(keep);
+
+  % the closest point extension, square on the band
+  [Ei, Ej, Es] = interp2_matrix(x1d, y1d, s.cpx, s.cpy, p);
+  jj = invband(Ej);
+  if any(jj == 0)
+    error('a closest point interpolation stencil leaves the band');
+  end
+  s.E = sparse(Ei, jj, Es, n, n);
+
+  % the Laplacian, square on the same band; entries outside it are
+  % dropped by laplacian_2d_matrix, which is what lfull records
+  s.L = laplacian_2d_matrix(x1d, y1d, order, band, band);
+  s.lfull = (full(sum(s.L ~= 0, 2)) == sten);
+  if ~all(s.lfull(unique(jj)))
+    error('the Laplacian stencil of a row the extension reads leaves the band');
+  end
 end
 
 
 function vid = vertex_ids(s, V)
-%VERTEX_IDS  which cut point each outer-band row sits at, 0 if none
-%   A row with vid ~= 0 is one whose closest point on this arc is a cut
-%   point: those are the rows that get rotated and extended through the
-%   other half.
+%VERTEX_IDS  which band node sits at a cut point, 0 if none
+%   A node with vid ~= 0 is one whose closest point on this arc is a cut
+%   point: those are the ones that get rotated and extended through the
+%   other half.  With a single band these are also exactly the unknowns
+%   the glue acts on, so the same vector serves both the operator and
+%   the picture.
 
   tol = 100*eps(max(1, max(abs(V(:)))));
-  vid = zeros(size(s.cpxout));
+  vid = zeros(size(s.cpx));
   for j = 1:size(V,1)
-    vid(hypot(s.cpxout - V(j,1), s.cpyout - V(j,2)) <= tol) = j;
+    vid(hypot(s.cpx - V(j,1), s.cpy - V(j,2)) <= tol) = j;
   end
-  if any((s.bdyout ~= 0) & (vid == 0))
-    error('an endpoint row was not matched to a cut point');
+  if any((s.bdy ~= 0) & (vid == 0))
+    error('an endpoint node was not matched to a cut point');
   end
 end
 
 
 function tau = cp_tangent(s, v, scheme)
 %CP_TANGENT  outward unit tangent at an arc endpoint, from cp differences
-%   Uses the outer-band nodes whose closest point on the arc is the
-%   endpoint v.  With cpbar = cp(2*cp(x)-x) and cp2bar = cp(3*cp(x)-2*x),
+%   Uses the band nodes whose closest point on the arc is the endpoint v
+%   -- the same nodes the glue then rotates, which with one band is a
+%   slightly larger set than the companion script's outer-band rows.
+%   With cpbar = cp(2*cp(x)-x) and cp2bar = cp(3*cp(x)-2*x),
 %
 %     scheme 1:  d_k  = cp - cpbar                          (first order)
 %     scheme 2:  d_k2 = 1.5*cp - 2*cpbar + 0.5*cp2bar       (second order)
 
   tol = 100*eps(max(1, max(abs(v))));
-  m = (abs(s.cpxout - v(1)) <= tol) & (abs(s.cpyout - v(2)) <= tol);
-  x = s.xout(m);  y = s.yout(m);
-  cx = s.cpxout(m);  cy = s.cpyout(m);
+  m = (abs(s.cpx - v(1)) <= tol) & (abs(s.cpy - v(2)) <= tol);
+  x = s.x(m);  y = s.y(m);
+  cx = s.cpx(m);  cy = s.cpy(m);
   if isempty(x)
     error('no grid points have this cut point as their closest point');
   end
@@ -935,37 +986,42 @@ function tau = cp_tangent(s, v, scheme)
 end
 
 
-function gl = make_glue_rot(tauo)
-%MAKE_GLUE_ROT  the rigid rotation glue from the outward tangents
-%   tauo(branch, cut point, component).  gl.theta(k,j) is the angle branch
-%   k turns its clamped rows through at cut point j.
-
-  gl.type = 'rot';
-  gl.theta = glue_angles(squeeze(tauo(1,:,:)), squeeze(tauo(2,:,:)));
-end
-
-
-
-
-function out = icpm_solve(br, gl, x1d, y1d, p, a, b, cen, ufun, ffun)
-%ICPM_SOLVE Assemble and solve u - laplacian_S u with rigid rotation glue.
-% For two branches, clamped outer rows are rotated about their cut point,
-% projected onto the other arc, and interpolated there.
+function out = vgmm_solve(br, theta, x1d, y1d, p, dim, a, b, cen, ufun, ffun)
+%VGMM_SOLVE  assemble and solve u - laplacian_S u = f the vGMM way
+%   br is one branch (the uncut curve, the baseline) or two (the glued
+%   halves).  With two branches, the band nodes sitting at a cut point
+%   are rotated about it by theta(k,j) -- k the branch, j the cut point
+%   -- and then extended by interpolating on the other branch, which is
+%   the same glue the iCPM script uses and lands in the same place: the
+%   off-diagonal block E_{k,o} of the extension.
+%
+%   The operator is then the embedded method-of-lines one of [vGMM 2013],
+%
+%       M = E*L - gamma*(I - E),      gamma = 2*dim/dx^2,
+%
+%   and the glue needs no further handling.  L is block diagonal, so
+%   (E*L)_{k,o} = E_{k,o}*L_o, which extends the OTHER half's L u across
+%   the cut; and the penalty row u_i - (E u)_i at a rotated node i of
+%   half k is exactly the statement that half k's value there agrees
+%   with half o's interpolant at the rotated point.
+%
+%   Returns the solution split by branch in out.ubr, which is what the
+%   two halves are compared through, and the surface L_inf error in
+%   out.errsurf.
 
   nb = numel(br);
+  dx = br{1}.dx;
   out.nclamp = 0;
 
   Eb = cell(nb, nb);
-  ts = cell(nb, 1);
   for i = 1:nb
     for j = 1:nb
       if (i == j)
         Eb{i,j} = br{i}.E;
       else
-        Eb{i,j} = sparse(br{i}.nout, br{j}.nin);
+        Eb{i,j} = sparse(br{i}.n, br{j}.n);
       end
     end
-    ts{i} = br{i}.geo.parfun(br{i}.cpxout, br{i}.cpyout);
   end
 
   for k = 1:(nb - 1)*2      % nothing to route when there is one branch
@@ -974,60 +1030,57 @@ function out = icpm_solve(br, gl, x1d, y1d, p, a, b, cen, ufun, ffun)
     if isempty(rows)
       error('no rows to route across the cut on branch %d', k);
     end
-    vids = br{k}.vid(rows);
-    x0 = br{k}.cpxout(rows);        % the cut point itself
-    y0 = br{k}.cpyout(rows);
-    xq = br{k}.xout(rows);
-    yq = br{k}.yout(rows);
-    xr = zeros(size(rows));
-    yr = zeros(size(rows));
-    th = gl.theta(k, vids).';
-    ddx = xq - x0;
-    ddy = yq - y0;
+    th = theta(k, br{k}.vid(rows)).';
+    x0 = br{k}.cpx(rows);        % the cut point itself
+    y0 = br{k}.cpy(rows);
+    ddx = br{k}.x(rows) - x0;
+    ddy = br{k}.y(rows) - y0;
     xr = x0 + cos(th).*ddx - sin(th).*ddy;
     yr = y0 + sin(th).*ddx + cos(th).*ddy;
 
-    % A wrong glue can push a row back across the normal line, and its
-    % closest point on the other half is then clamped to the cut point
-    % again.  That is the method doing what it does with a wrong glue, not
-    % a failure: it is counted, not rejected.
+    % A wrong rotation can push a row back across the normal line, and
+    % its closest point on the other half is then clamped to the cut
+    % point again.  That is the method doing what it does with a wrong
+    % angle, not a failure: it is counted, not rejected.
     [cpxr, cpyr, ~, bdyr] = br{o}.cpf(xr, yr);
     out.nclamp = out.nclamp + sum(bdyr ~= 0);
     [Ei, Ej, Es] = interp2_matrix(x1d, y1d, cpxr, cpyr, p);
-    jj = br{o}.inv_inner(Ej);
+    jj = br{o}.invband(Ej);
     if any(jj == 0)
-      error('a cross-cut interpolation stencil leaves the other inner band');
+        error('a cross-cut interpolation stencil leaves the other band');
     end
-    Eb{k,o} = sparse(rows(Ei), jj, Es, br{k}.nout, br{o}.nin);
+    % E*L reads L on those columns, so they must be full-stencil rows
+    if ~all(br{o}.lfull(unique(jj)))
+      error('a cross-cut stencil reads a row whose Laplacian leaves the band');
+    end
+    Eb{k,o} = sparse(rows(Ei), jj, Es, br{k}.n, br{o}.n);
     % these rows are extended through the other half now, not this one
     Ekk = Eb{k,k};
     Ekk(rows,:) = 0;
     Eb{k,k} = Ekk;
-    % and they stand for u where the glue sent them
-    ts{k}(rows) = br{o}.geo.parfun(cpxr, cpyr);
   end
   if (nb == 2)
     Eblk = [Eb{1,1} Eb{1,2}; Eb{2,1} Eb{2,2}];
     Lblk = blkdiag(br{1}.L, br{2}.L);
-    Rblk = blkdiag(br{1}.R, br{2}.R);
   else
     Eblk = Eb{1,1};
     Lblk = br{1}.L;
-    Rblk = br{1}.R;
   end
 
   % the interpolation weights of every row must still sum to one
   out.rowsum = max(abs(full(sum(Eblk, 2)) - 1));
 
-  %% Diagonal splitting for iCPM, then the elliptic solve
-  M = lapsharp_unordered(Lblk, Eblk, Rblk);
-  n = size(M, 1);
+  %% The vGMM operator, then the elliptic solve
+  n = size(Eblk, 1);
+  gamma = 2*dim/dx^2;
+  M = Eblk*Lblk - gamma*(speye(n) - Eblk);
 
   rhs = zeros(n, 1);
   off = 0;
   for k = 1:nb
-    rhs(off + (1:br{k}.nin)) = ffun(br{k}.R*ts{k});
-    off = off + br{k}.nin;
+    t = br{k}.geo.parfun(br{k}.cpx, br{k}.cpy);
+    rhs(off + (1:br{k}.n)) = ffun(t);
+    off = off + br{k}.n;
   end
   u = (speye(n) - M) \ rhs;
   if any(~isfinite(u))
@@ -1041,7 +1094,7 @@ function out = icpm_solve(br, gl, x1d, y1d, p, a, b, cen, ufun, ffun)
   off = 0;
   out.terr = NaN;
   for k = 1:nb
-    out.ubr{k} = u(off + (1:br{k}.nin));
+    out.ubr{k} = u(off + (1:br{k}.n));
     [es, nd, tg] = surface_error(x1d, y1d, p, br{k}, out.ubr{k}, ...
                                  a, b, cen, ufun);
     if (es > out.errsurf)
@@ -1049,7 +1102,7 @@ function out = icpm_solve(br, gl, x1d, y1d, p, a, b, cen, ufun, ffun)
       out.terr = tg;
     end
     out.ndrop = out.ndrop + nd;
-    off = off + br{k}.nin;
+    off = off + br{k}.n;
   end
   out.u = u;
   out.unknowns = n;
@@ -1060,7 +1113,7 @@ function [eLinf, ndrop, targ] = surface_error(x1d, y1d, p, s, u, a, b, cen, ufun
 %SURFACE_ERROR  L_inf error of the interpolant on the curve
 %   Midpoints of a uniform partition of each arc's parameter interval, so
 %   no sample sits exactly on a cut point.  A sample whose interpolation
-%   stencil is not entirely inside the inner band is dropped and counted.
+%   stencil is not entirely inside the band is dropped and counted.
 %   One arc for a half, both for the uncut baseline.
 
   eLinf = 0;
@@ -1076,7 +1129,7 @@ function [eLinf, ndrop, targ] = surface_error(x1d, y1d, p, s, u, a, b, cen, ufun
 
     [~, Ej, Es] = interp2_matrix(x1d, y1d, xy(:,1), xy(:,2), p);
     ns = (p+1)^2;
-    JJ = reshape(s.inv_inner(Ej), nq, ns);
+    JJ = reshape(s.invband(Ej), nq, ns);
     SS = reshape(Es, nq, ns);
     good = all(JJ > 0, 2);
     ndrop = ndrop + nq - sum(good);
@@ -1085,7 +1138,7 @@ function [eLinf, ndrop, targ] = surface_error(x1d, y1d, p, s, u, a, b, cen, ufun
     JJ = JJ(good,:);
     SS = SS(good,:);
     ii = repmat((1:ng)', 1, ns);
-    Eq = sparse(ii(:), JJ(:), SS(:), ng, s.nin);
+    Eq = sparse(ii(:), JJ(:), SS(:), ng, s.n);
     tg = tq(good);
     [e, im] = max(abs(Eq*u - ufun(tg)));
     if (e > eLinf)
@@ -1099,15 +1152,17 @@ end
 function hh = drawband(brs, ushow, cl, V, a, b, cen, yc, tv, dx_show, bw, ...
                        msize, geo)
 %DRAWBAND  the curve, the band coloured by the solution, and the rotations
-%   One filled square per unknown, at the inner-band node that carries it
-%   and coloured by its value, both halves on the same colour scale.  Two
-%   overlays mark where the glue acts: an open SQUARE on a node the upper
-%   half rotates across the cut, an open CIRCLE on one the lower half
-%   does.  On the plain ellipse those two sets are disjoint, because the
-%   halves share a normal line at the cut point and a node falls on one
-%   side of it or the other.  At a corner the normals are different lines
-%   and a node in the wedge between them gets both marks, which is what
-%   the two marker shapes are there to show.
+%   One filled square per unknown, at the band node that carries it and
+%   coloured by its value, both halves on the same colour scale.  The
+%   band drawn here is the whole vGMM band, which is wider than the inner
+%   band of the iCPM script because every node of it carries an unknown.
+%   Two overlays mark where the glue acts: an open SQUARE on a node the
+%   upper half rotates across the cut, an open CIRCLE on one the lower
+%   half does.  On the plain ellipse those two sets are disjoint, because
+%   the halves share a normal line at the cut point and a node falls on
+%   one side of it or the other.  At a corner the normals are different
+%   lines and a node in the wedge between them gets both marks, which is
+%   what the two marker shapes are there to show.
 %
 %   The curve is drawn arc by arc from geo, so it comes out flipped when
 %   the geometry is, and each arc gets its own normal at each cut point.
@@ -1121,14 +1176,14 @@ function hh = drawband(brs, ushow, cl, V, a, b, cen, yc, tv, dx_show, bw, ...
   % branch B's is a smaller square inset on top of it, and where the two
   % agree the inset simply disappears into its surroundings.  On the
   % ellipse it always does; on the flipped curve it does not.
-  [~, i1, i2] = intersect(brs{1}.innerband, brs{2}.innerband);
-  onlyB = true(size(brs{2}.xin));
+  [~, i1, i2] = intersect(brs{1}.band, brs{2}.band);
+  onlyB = true(size(brs{2}.x));
   onlyB(i2) = false;
 
-  hh(1) = scatter(brs{1}.xin, brs{1}.yin, msize^2, ushow{1}, 's', 'filled');
-  scatter(brs{2}.xin(onlyB), brs{2}.yin(onlyB), msize^2, ...
+  hh(1) = scatter(brs{1}.x, brs{1}.y, msize^2, ushow{1}, 's', 'filled');
+  scatter(brs{2}.x(onlyB), brs{2}.y(onlyB), msize^2, ...
           ushow{2}(onlyB), 's', 'filled');
-  hh(8) = scatter(brs{1}.xin(i1), brs{1}.yin(i1), (0.5*msize)^2, ...
+  hh(8) = scatter(brs{1}.x(i1), brs{1}.y(i1), (0.5*msize)^2, ...
                   ushow{2}(i2), 's', 'filled');
   set(gca, 'CLim', cl);
   colormap(gca, parula);
@@ -1153,29 +1208,14 @@ function hh = drawband(brs, ushow, cl, V, a, b, cen, yc, tv, dx_show, bw, ...
 
   % the circle is drawn larger than the square so that a node carrying
   % both marks still shows both
-  rA = rotated_inner(brs{1}, V);
-  rB = rotated_inner(brs{2}, V);
-  hh(5) = plot(brs{1}.xin(rA), brs{1}.yin(rA), 's', 'Color', [0.85 0 0], ...
+  rA = (brs{1}.vid ~= 0);
+  rB = (brs{2}.vid ~= 0);
+  hh(5) = plot(brs{1}.x(rA), brs{1}.y(rA), 's', 'Color', [0.85 0 0], ...
                'MarkerSize', 1.5*msize, 'LineWidth', 1.0);
-  hh(6) = plot(brs{2}.xin(rB), brs{2}.yin(rB), 'o', 'Color', [0 0 0], ...
+  hh(6) = plot(brs{2}.x(rB), brs{2}.y(rB), 'o', 'Color', [0 0 0], ...
                'MarkerSize', 2.1*msize, 'LineWidth', 1.0);
   hh(7) = plot(V(:,1), V(:,2), 'kp', 'MarkerFaceColor', 'y', ...
                'MarkerSize', 2.2*msize);
-end
-
-
-function m = rotated_inner(s, V)
-%ROTATED_INNER  which inner-band nodes this half rotates across the cut
-%   The nodes carrying an unknown whose closest point on this half is a
-%   cut point.  Same bit-for-bit test as vertex_ids, on the inner band
-%   rather than the outer one, because the inner band is where the
-%   unknowns being drawn live.
-
-  tol = 100*eps(max(1, max(abs(V(:)))));
-  m = false(size(s.cpxin));
-  for j = 1:size(V,1)
-    m = m | (hypot(s.cpxin - V(j,1), s.cpyin - V(j,2)) <= tol);
-  end
 end
 
 
@@ -1207,7 +1247,7 @@ function leftpanel(brs, ushow, cl, V, a, b, cen, yc, tv, dx_show, bw, ...
   xlabel('x'); ylabel('y');
   title({sprintf('%s:  a = %g, b = %g, cut at y = %g  (\\kappa = %.3f)', ...
                  geoname, a, b, yc, kappa), ...
-         sprintf('band drawn at dx = %.4g', dx_show)}, 'FontSize', 9);
+         sprintf('vGMM band drawn at dx = %.4g', dx_show)}, 'FontSize', 9);
   legend(hh, {'band node, colour = u', 'the manifold', ...
               sprintf('cut line y = %g', yc), 'normals at the cut points', ...
               'rotated for branch A (upper)', ...
@@ -1248,11 +1288,10 @@ function plotconv(hvals, err, rate, labels, ylab)
 %   glue scheme.
 
   hold on;
-  markers = {'o', 's', 'd', '^', 'v', '>'};
-  colors = [0 0 0; 0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19; ...
-            0.49 0.18 0.56; 0.30 0.75 0.93];
+  markers = {'o', 's', 'd', '^'};
+  colors = [0 0 0; 0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19];
   n = size(err, 1);
-  off = numel(labels) - n;   % the baseline is row one when it is there
+  off = 4 - n;      % three curves means no baseline, so skip the black
   for iv = 1:n
     % the exact rotation lands on the uncut baseline to plotting accuracy
     % at a normal cut, so the baseline is drawn heavy enough to still be
@@ -1283,11 +1322,10 @@ function plotgaps(hvals, data, rates, varlabels, metriclabels)
 %   compares schemes; reading across compares what is being measured.
 
   hold on;
-  markers = {'s', 'd', '^', 'v', '>'};
+  markers = {'s', 'd', '^'};
   styles = {'-', '--', '-.'};
   widths = [1.5 1.2 1.2];
-  colors = [0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19; ...
-            0.49 0.18 0.56; 0.30 0.75 0.93];
+  colors = [0.85 0.33 0.10; 0.00 0.45 0.74; 0.47 0.67 0.19];
   top = 0;
   for im = 1:length(data)
     for iv = 1:size(data{im}, 1)
@@ -1332,16 +1370,16 @@ end
 function val = interp_at(x1d, y1d, p, s, u, pts)
 %INTERP_AT  one half's interpolant evaluated at points of the surface
 %   The same degree-p interpolation the operator itself uses, restricted
-%   to this half's inner band.  Used at the cut points, where both halves
-%   have a value and both of them stand for u(v).
+%   to this half's band.  Used at the cut points, where both halves have
+%   a value and both of them stand for u(v).
 
   n = size(pts, 1);
   [~, Ej, Es] = interp2_matrix(x1d, y1d, pts(:,1), pts(:,2), p);
   ns = (p+1)^2;
-  JJ = reshape(s.inv_inner(Ej), n, ns);
+  JJ = reshape(s.invband(Ej), n, ns);
   SS = reshape(Es, n, ns);
   if any(JJ(:) == 0)
-    error('an interpolation stencil at a cut point leaves the inner band');
+    error('an interpolation stencil at a cut point leaves the band');
   end
   val = sum(SS.*u(JJ), 2);
 end

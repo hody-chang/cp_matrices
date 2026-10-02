@@ -85,9 +85,12 @@
 % corner.  Figures are named for the geometry, so the two do not overwrite
 % each other.  The cut heights and grid sizes are edited below as well.
 
-% adjust as appropriate
-addpath('../cp_matrices');
-addpath('../surfaces');
+% Resolve dependencies relative to this example.
+here = fileparts(mfilename('fullpath'));
+addpath(here);
+addpath(fullfile(here, '..', '..', 'cp_matrices'));
+addpath(fullfile(here, '..', '..', 'surfaces'));
+addpath(fullfile(here, '..', 'surfaces'));
 
 
 %% Parameters
@@ -160,7 +163,7 @@ end
 % enough to see the individual nodes and fine enough to still be a band
 dx_show = min(0.05, 0.5/(bw*max(a/b^2, b/a^2)));
 
-figdir = 'figs';   % .png output goes here
+figdir = fullfile(here, '..', 'figs');   % .png output goes here
 
 schemelabels = {'d_k', 'd_{k2}'};
 

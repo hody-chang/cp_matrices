@@ -7,9 +7,11 @@
 % rigid rotation acquires $C_1 h$ as the branch curvatures differ, while
 % circular arclength continuation remains second order.
 
-% adjust as appropriate
-addpath('../cp_matrices');
-addpath('../surfaces');
+% Resolve dependencies relative to this example.
+here = fileparts(mfilename('fullpath'));
+addpath(here);
+addpath(fullfile(here, '..', '..', 'cp_matrices'));
+addpath(fullfile(here, '..', '..', 'surfaces'));
 
 %% Problem, geometry, and discretization
 H = 0.4;
@@ -105,7 +107,7 @@ for ir = 1:numel(results)
 end
 
 %% Requested visualization
-figdir = 'figs';
+figdir = fullfile(here, '..', 'figs');
 if ~exist(figdir, 'dir'), mkdir(figdir); end
 fig = figure('Color', 'w', 'Position', [100 100 1500 460]);
 subplot(1,3,1); hold on; axis equal; box on;
