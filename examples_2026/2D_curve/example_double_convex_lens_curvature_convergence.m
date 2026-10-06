@@ -12,6 +12,7 @@ here = fileparts(mfilename('fullpath'));
 addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 %% Problem, geometry, and discretization
 H = 0.4;
@@ -294,12 +295,17 @@ function [out, ubr] = assemble_solve(geo, br, x1d, y1d, p, glue_type, ffun)
       use = vids == iv;
       if ~any(use), continue; end
       if strcmp(glue_type, 'rotation') || strcmp(glue_type, 'rotation_dk2')
+        % Rodrigues about the out-of-plane axis: the rotation comes out of
+        % the two tangents as a (cos, sin) pair and is applied as built,
+        % with no angle formed in between.  See glue_rot2d.
         if strcmp(glue_type, 'rotation_dk2')
-          a = glue_angle(squeeze(tauout(source,iv,:)).', squeeze(tauout(target,iv,:)).');
+          [cc, ss] = glue_rot2d(squeeze(tauout(source,iv,:)).', ...
+                                squeeze(tauout(target,iv,:)).');
         else
-          a = glue_angle(br(source).geo.tauout(iv,:), br(target).geo.tauout(iv,:));
+          [cc, ss] = glue_rot2d(br(source).geo.tauout(iv,:), ...
+                                br(target).geo.tauout(iv,:));
         end
-        qmap(use,:) = rotate_about(xq(use,:), geo.vertices(iv,:), a);
+        qmap(use,:) = rotate_about2d(xq(use,:), geo.vertices(iv,:), cc, ss);
       elseif strcmp(glue_type, 'arclength')
         qmap(use,:) = map_by_arclength(xq(use,:), geo.vertices(iv,:), ...
             br(source).geo, br(target).geo, br(source).geo.tauout(iv,:), ...
@@ -327,13 +333,6 @@ function [out, ubr] = assemble_solve(geo, br, x1d, y1d, p, glue_type, ffun)
   ubr = {u(1:br(1).nin), u(br(1).nin + (1:br(2).nin))};
 end
 
-function angle = glue_angle(tauout_source, tauout_target)
-%GLUE_ANGLE Directed rotation from source outward tangent to negative target outward tangent.
-  angle = atan2(-tauout_target(2), -tauout_target(1)) - ...
-          atan2(tauout_source(2), tauout_source(1));
-  angle = atan2(sin(angle), cos(angle));
-end
-
 function tau = cp_tangent_dk2(br, v)
 %CP_TANGENT_DK2 Estimate an outward endpoint tangent from second-order CP differences.
 % br is one branch band and v is one of its exact endpoint coordinates.
@@ -351,12 +350,6 @@ function tau = cp_tangent_dk2(br, v)
   if ~any(good), error('d_{k2} gave no usable endpoint tangent'); end
   tau = [mean(dvx(good)./nrm(good)), mean(dvy(good)./nrm(good))];
   tau = tau/norm(tau);
-end
-
-function q = rotate_about(x, v, angle)
-%ROTATE_ABOUT Rigidly rotate row points x about vertex v by angle radians.
-  c = cos(angle); s = sin(angle); d = x - v;
-  q = v + [c*d(:,1) - s*d(:,2), s*d(:,1) + c*d(:,2)];
 end
 
 function q = map_by_arclength(xq, v, source, target, tauout_source, tauin_target)

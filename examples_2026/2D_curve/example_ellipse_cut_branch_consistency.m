@@ -46,6 +46,7 @@ addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
 addpath(fullfile(here, '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 
 %% Parameters
@@ -207,7 +208,11 @@ for ci = 1:length(ycut_list)
   if flipped
     tauex{2}(:,2) = -tauex{2}(:,2);
   end
-  thetaex = glue_angles(tauex{1}, tauex{2});
+  % the glue is stored as the (cos, sin) pair Rodrigues' formula produces
+  % from the tangents, never as an angle; thetaex is derived from it only
+  % for the printed report.  See glue_rot2d.
+  csex = glue_cs(tauex{1}, tauex{2});
+  thetaex = cs_angle(csex);
 
   % The exact rotation depends only on the known endpoint tangents.
   tauex3 = zeros(2,2,2);
@@ -258,7 +263,7 @@ for ci = 1:length(ycut_list)
     dcorner(k) = min(abs(wrapangle(outw.terr - tv)).*sqg);
 
     %% The nodes the two halves have in common
-    sh = shared_points(br, V, geo, thetaex);
+    sh = shared_points(br, V, geo, csex);
     nrot(k) = sum(sh.rot);
     nshare(k) = length(sh.i1);
     if (nrot(k) == 0)
@@ -278,9 +283,12 @@ for ci = 1:length(ycut_list)
           tauo(jb,m,:,scheme+1) = cp_tangent(br{jb}, V(m,:), scheme);
         end
       end
-      th = glue_angles(squeeze(tauo(1,:,:,scheme+1)), ...
-                       squeeze(tauo(2,:,:,scheme+1)));
-      thetamax(scheme,k) = max(max(abs(wrapangle(th - thetaex))));
+      cs = glue_cs(squeeze(tauo(1,:,:,scheme+1)), ...
+                   squeeze(tauo(2,:,:,scheme+1)));
+      % the error is the angle of the relative rotation R_exact' * R, which
+      % lands in (-pi, pi] by construction: no difference of two angles and
+      % no rewrap, so nothing to go wrong when both sit near +-pi
+      thetamax(scheme,k) = max(max(abs(cs_angle_diff(cs, csex))));
     end
 
     glv = {make_glue_rot(squeeze(tauo(:,:,:,2))), ...
@@ -671,29 +679,55 @@ function tau = unit_tangent(t, sgn, a, b)
 end
 
 
-function th = glue_angles(tauA, tauB)
-%GLUE_ANGLES  the rotation each half needs, from the two outward tangents
+function cs = glue_cs(tauA, tauB)
+%GLUE_CS  the rotation each half needs, from the two outward tangents
 %   tauA(j,:) and tauB(j,:) are the outward unit tangents of the two
 %   halves at cut point j -- outward meaning away from that half's own
 %   arc.  A row of half A sitting past the cut point lies roughly in the
 %   direction tauA from it, and the glue has to put it where arc B
-%   continues, which is the direction -tauB.  So the rotation is the
-%   angle from tauA to -tauB, and the other half is the mirror of that.
-%   On a smooth join tauB = -tauA and both angles are zero.
+%   continues, which is the direction -tauB.  So the rotation is the one
+%   carrying tauA onto -tauB, and the other half's is the mirror of that.
+%   On a smooth join tauB = -tauA and both rotations are the identity.
+%
+%   cs(k,j,1) and cs(k,j,2) are the cosine and sine of the rotation branch
+%   k applies at cut point j.  They come from glue_rot2d, which is
+%   Rodrigues' formula about the out-of-plane axis: the cosine is a dot
+%   product of the two tangents and the sine their cross product, so no
+%   angle is ever formed and no transcendental is evaluated.  The two
+%   branches come out with exactly opposite sines, which says their
+%   rotations are exact transposes of one another.
 
-  th = zeros(2, 2);
-  for j = 1:2
-    th(1,j) = wrapangle(atan2(-tauB(j,2), -tauB(j,1)) - ...
-                        atan2( tauA(j,2),  tauA(j,1)));
-    th(2,j) = wrapangle(atan2(-tauA(j,2), -tauA(j,1)) - ...
-                        atan2( tauB(j,2),  tauB(j,1)));
-  end
+  n = size(tauA, 1);
+  cs = zeros(2, n, 2);
+  [c, s] = glue_rot2d(tauA, tauB);
+  cs(1,:,1) = c;  cs(1,:,2) = s;
+  [c, s] = glue_rot2d(tauB, tauA);
+  cs(2,:,1) = c;  cs(2,:,2) = s;
 end
 
-function sh = shared_points(br, V, geo, thetaex)
+
+function th = cs_angle(cs)
+%CS_ANGLE  the angles of the rotations in cs, for printing only
+%   Nothing the operator applies is computed from these.
+
+  th = atan2(cs(:,:,2), cs(:,:,1));
+end
+
+
+function dth = cs_angle_diff(cs, csref)
+%CS_ANGLE_DIFF  the angle error of a glue estimate, rotation by rotation
+%   The angle of the relative rotation csref' * cs, which is in (-pi, pi]
+%   already: no difference of two angles and no rewrap.  See rot2d_err.
+
+  dth = rot2d_err(cs(:,:,1), cs(:,:,2), csref(:,:,1), csref(:,:,2));
+end
+
+
+function sh = shared_points(br, V, geo, csex)
 %SHARED_POINTS Shared inner-band nodes and their exact-rotation references.
 % sh.tA and sh.tB are the arclength parameters represented by each branch
 % unknown after endpoint rows are routed by the analytic rotation.
+% csex(k,j,:) is the (cos, sin) pair of that rotation, as glue_cs built it.
 
   [~, i1, i2] = intersect(br{1}.innerband, br{2}.innerband);
   sh.i1 = i1;
@@ -722,13 +756,14 @@ function sh = shared_points(br, V, geo, thetaex)
     t{k} = geo{k}.parfun(cp{k}(:,1), cp{k}(:,2));
     m = find(vid{k} ~= 0);
     if ~isempty(m)
-      th = thetaex(k, vid{k}(m)).';
+      cc = csex(k, vid{k}(m), 1).';
+      ss = csex(k, vid{k}(m), 2).';
       x0 = V(vid{k}(m), 1);
       y0 = V(vid{k}(m), 2);
       ddx = sh.x(m) - x0;
       ddy = sh.y(m) - y0;
-      xr = x0 + cos(th).*ddx - sin(th).*ddy;
-      yr = y0 + sin(th).*ddx + cos(th).*ddy;
+      xr = x0 + cc.*ddx - ss.*ddy;
+      yr = y0 + ss.*ddx + cc.*ddy;
       [cxr, cyr] = geo{o}.cpf(xr, yr);
       t{k}(m) = geo{o}.parfun(cxr, cyr);
     end
@@ -940,11 +975,14 @@ end
 
 function gl = make_glue_rot(tauo)
 %MAKE_GLUE_ROT  the rigid rotation glue from the outward tangents
-%   tauo(branch, cut point, component).  gl.theta(k,j) is the angle branch
-%   k turns its clamped rows through at cut point j.
+%   tauo(branch, cut point, component).  gl.cs(k,j,:) is the (cos, sin)
+%   pair of the rotation branch k turns its clamped rows through at cut
+%   point j, built by Rodrigues' formula in glue_rot2d.  gl.theta carries
+%   the same rotations as angles, for reporting only.
 
   gl.type = 'rot';
-  gl.theta = glue_angles(squeeze(tauo(1,:,:)), squeeze(tauo(2,:,:)));
+  gl.cs = glue_cs(squeeze(tauo(1,:,:)), squeeze(tauo(2,:,:)));
+  gl.theta = cs_angle(gl.cs);
 end
 
 
@@ -982,13 +1020,14 @@ function out = icpm_solve(br, gl, x1d, y1d, p, a, b, cen, ufun, ffun)
     y0 = br{k}.cpyout(rows);
     xq = br{k}.xout(rows);
     yq = br{k}.yout(rows);
-    xr = zeros(size(rows));
-    yr = zeros(size(rows));
-    th = gl.theta(k, vids).';
+    % the glue pair is applied exactly as it was built: no angle in the
+    % loop, and so no cos/sin undoing an atan2
+    cc = gl.cs(k, vids, 1).';
+    ss = gl.cs(k, vids, 2).';
     ddx = xq - x0;
     ddy = yq - y0;
-    xr = x0 + cos(th).*ddx - sin(th).*ddy;
-    yr = y0 + sin(th).*ddx + cos(th).*ddy;
+    xr = x0 + cc.*ddx - ss.*ddy;
+    yr = y0 + ss.*ddx + cc.*ddy;
 
     % A wrong glue can push a row back across the normal line, and its
     % closest point on the other half is then clamped to the cut point

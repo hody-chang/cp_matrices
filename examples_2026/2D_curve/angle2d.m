@@ -10,8 +10,13 @@ function [R, tangent, info] = angle2d(x, y, cpf, singpt, varargin)
 %      are discarded, the remaining vectors are normalized, and tangent is
 %      the normalized average direction.  R is the 2x2 rotation matrix
 %      that maps [1; 0] to tangent, built directly from the tangent
-%      components:  R = [t(1) -t(2); t(2) t(1)].  The angle
-%      theta = atan2(tangent(2), tangent(1)) is stored in info.theta.
+%      components:  R = [t(1) -t(2); t(2) t(1)].  That is Rodrigues'
+%      formula about the out-of-plane axis with [1; 0] as the source
+%      direction, which makes the cosine t(1) and the sine t(2); no angle
+%      is formed and no transcendental is evaluated.  The equivalent for an
+%      arbitrary pair of directions is rot2d_from_to in
+%      ../rotations, and info.theta below, which is
+%      atan2(tangent(2), tangent(1)), is for reporting only.
 %
 %      Extra inputs are forwarded to cpf.
 %
@@ -76,8 +81,11 @@ function [R, tangent, info] = angle2d(x, y, cpf, singpt, varargin)
 
     if (avgnorm > vectol)
       tangent = avg ./ avgnorm;
-      theta = atan2(tangent(2), tangent(1));
+      % the rotation taking [1; 0] onto tangent, read straight off the
+      % tangent's components; theta is derived from it for reporting and
+      % nothing is computed from theta
       R = [tangent(1) -tangent(2); tangent(2) tangent(1)];
+      theta = atan2(tangent(2), tangent(1));
     end
   end
 

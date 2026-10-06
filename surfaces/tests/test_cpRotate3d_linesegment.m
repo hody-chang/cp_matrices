@@ -36,7 +36,19 @@ function [pass, str] = test_cpRotate3d_linesegment()
                       assertAlmostEqual(cpy1, cpy2) && ...
                       assertAlmostEqual(cpz1, cpz2) && ...
                       assertAlmostEqual(dist1, dist2);
-    c=c+1;  pass(c) = assertAlmostEqual(bdy1, bdy2);
+    % 'bdy' is an integer flag that jumps where the closest point
+    % switches from the interior of the segment to one of its ends,
+    % that is, at line parameter s = 0 and s = 1.  cp1 and cp2 reach s
+    % by algebraically equal but numerically different arithmetic, so a
+    % grid point sitting *exactly* on one of those two breakpoints can
+    % round to either side of it and get either flag.  (For i==7, three
+    % of the 765 grid points lie exactly in the plane through q
+    % perpendicular to the segment.)  Compare bdy away from the
+    % breakpoints, where it is actually well defined.
+    s = ((x - p(1))*(q(1) - p(1)) + (y - p(2))*(q(2) - p(2)) + ...
+         (z - p(3))*(q(3) - p(3))) / sum((q - p).^2);
+    ok = (abs(s) > 100*eps) & (abs(s - 1) > 100*eps);
+    c=c+1;  pass(c) = assertAlmostEqual(bdy1(ok), bdy2(ok));
 
     if (1==0) || ~(all(pass))
       max(max(max(abs(cpx1-cpx2))))

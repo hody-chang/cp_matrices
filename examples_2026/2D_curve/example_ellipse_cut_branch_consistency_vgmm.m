@@ -94,6 +94,7 @@ addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
 addpath(fullfile(here, '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 
 %% Parameters
@@ -246,7 +247,11 @@ for ci = 1:length(ycut_list)
   if flipped
     tauex{2}(:,2) = -tauex{2}(:,2);
   end
-  thetaex = glue_angles(tauex{1}, tauex{2});
+  % the glue is stored as the (cos, sin) pair Rodrigues' formula gives
+  % from the tangents, never as an angle; thetaex is derived from it only
+  % for the printed report.  See glue_rot2d.
+  csex = glue_cs(tauex{1}, tauex{2});
+  thetaex = cs_angle(csex);
 
   err = nan(nvar+1, nh);    % surface L_inf error, baseline then the three
   gap = nan(nvar, nh);      % max |u_A - u_B| at the shared rotated nodes
@@ -291,7 +296,7 @@ for ci = 1:length(ycut_list)
     dcorner(k) = min(abs(wrapangle(outw.terr - tv)).*sqg);
 
     %% The nodes the two halves have in common
-    sh = shared_points(br, V, geo, thetaex);
+    sh = shared_points(br, V, geo, csex);
     nrot(k) = sum(sh.rot);
     nshare(k) = length(sh.i1);
     if (nrot(k) == 0)
@@ -302,21 +307,24 @@ for ci = 1:length(ycut_list)
     %% Endpoint tangents, and the glue rotation each scheme produces
     % thetamax is now the error in the angle, |theta - theta_exact|, not
     % |theta| itself: on the flipped curve the exact angle is not zero.
-    theta = zeros(2, 2, nvar);   % (branch, vertex, variant)
-    theta(:,:,nvar) = thetaex;   % the last variant is the exact rotation
+    cs = zeros(2, 2, 2, nvar);   % (branch, vertex, [cos sin], variant)
+    cs(:,:,:,nvar) = csex;       % the last variant is the exact rotation
     for scheme = 1:2
       tauA = [cp_tangent(br{1}, V(1,:), scheme); ...
               cp_tangent(br{1}, V(2,:), scheme)];
       tauB = [cp_tangent(br{2}, V(1,:), scheme); ...
               cp_tangent(br{2}, V(2,:), scheme)];
-      theta(:,:,scheme) = glue_angles(tauA, tauB);
-      thetamax(scheme,k) = ...
-          max(max(abs(wrapangle(theta(:,:,scheme) - thetaex))));
+      cs(:,:,:,scheme) = glue_cs(tauA, tauB);
+      % the error is the angle of the relative rotation R_exact' * R,
+      % which is in (-pi, pi] by construction: no difference of two
+      % angles and no rewrap.  See rot2d_err.
+      thetamax(scheme,k) = max(max(abs(cs_angle_diff(cs(:,:,:,scheme), ...
+                                                     csex))));
     end
 
     %% Solve, once per variant, and compare the halves node by node
     for iv = 1:nvar
-      out = vgmm_solve(br, theta(:,:,iv), x1d, y1d, p, dim, a, b, cen, ...
+      out = vgmm_solve(br, cs(:,:,:,iv), x1d, y1d, p, dim, a, b, cen, ...
                        ufun, ffun);
       if (out.rowsum > 1e-10)
         error('extension matrix rows do not sum to one (%g)', out.rowsum);
@@ -456,7 +464,7 @@ for ci = 1:length(ycut_list)
   % than any level in the convergence study -- the point is to see the
   % nodes, not the accuracy -- so this solve is for the picture only and
   % none of the numbers above come from it.
-  outshow = vgmm_solve(brs, thetaex, xs1d, ys1d, p, dim, a, b, cen, ...
+  outshow = vgmm_solve(brs, csex, xs1d, ys1d, p, dim, a, b, cen, ...
                        ufun, ffun);
   ushow = outshow.ubr;
   cl = [min([ushow{1}; ushow{2}]) max([ushow{1}; ushow{2}])];
@@ -696,26 +704,50 @@ function tau = unit_tangent(t, sgn, a, b)
 end
 
 
-function th = glue_angles(tauA, tauB)
-%GLUE_ANGLES  the rotation each half needs, from the two outward tangents
+function cs = glue_cs(tauA, tauB)
+%GLUE_CS  the rotation each half needs, from the two outward tangents
 %   tauA(j,:) and tauB(j,:) are the outward unit tangents of the two
 %   halves at cut point j -- outward meaning away from that half's own
 %   arc.  A row of half A sitting past the cut point lies roughly in the
 %   direction tauA from it, and the glue has to put it where arc B
-%   continues, which is the direction -tauB.  So the rotation is the
-%   angle from tauA to -tauB, and the other half is the mirror of that.
-%   On a smooth join tauB = -tauA and both angles are zero.
+%   continues, which is the direction -tauB.  So the rotation is the one
+%   carrying tauA onto -tauB, and the other half's is the mirror of that.
+%   On a smooth join tauB = -tauA and both rotations are the identity.
+%
+%   cs(k,j,1) and cs(k,j,2) are the cosine and sine of the rotation branch
+%   k applies at cut point j.  They come from glue_rot2d, which is
+%   Rodrigues' formula about the out-of-plane axis: the cosine is a dot
+%   product of the two tangents and the sine their cross product, so no
+%   angle is ever formed and no transcendental is evaluated.  The two
+%   branches come out with exactly opposite sines, which says their
+%   rotations are exact transposes of one another.
 
-  th = zeros(2, 2);
-  for j = 1:2
-    th(1,j) = wrapangle(atan2(-tauB(j,2), -tauB(j,1)) - ...
-                        atan2( tauA(j,2),  tauA(j,1)));
-    th(2,j) = wrapangle(atan2(-tauA(j,2), -tauA(j,1)) - ...
-                        atan2( tauB(j,2),  tauB(j,1)));
-  end
+  n = size(tauA, 1);
+  cs = zeros(2, n, 2);
+  [c, s] = glue_rot2d(tauA, tauB);
+  cs(1,:,1) = c;  cs(1,:,2) = s;
+  [c, s] = glue_rot2d(tauB, tauA);
+  cs(2,:,1) = c;  cs(2,:,2) = s;
 end
 
-function sh = shared_points(br, V, geo, thetaex)
+
+function th = cs_angle(cs)
+%CS_ANGLE  the angles of the rotations in cs, for printing only
+%   Nothing the operator applies is computed from these.
+
+  th = atan2(cs(:,:,2), cs(:,:,1));
+end
+
+
+function dth = cs_angle_diff(cs, csref)
+%CS_ANGLE_DIFF  the angle error of a glue estimate, rotation by rotation
+%   The angle of the relative rotation csref' * cs, which is in (-pi, pi]
+%   already: no difference of two angles and no rewrap.  See rot2d_err.
+
+  dth = rot2d_err(cs(:,:,1), cs(:,:,2), csref(:,:,1), csref(:,:,2));
+end
+
+function sh = shared_points(br, V, geo, csex)
 %SHARED_POINTS  the grid nodes carrying an unknown in BOTH halves
 %   With one band per half the unknowns are the band itself, stored as
 %   global linear indices into the grid, so the overlap is their
@@ -775,13 +807,14 @@ function sh = shared_points(br, V, geo, thetaex)
     t{k} = geo{k}.parfun(cp{k}(:,1), cp{k}(:,2));
     m = find(vid{k} ~= 0);
     if ~isempty(m)
-      th = thetaex(k, vid{k}(m)).';
+      cc = csex(k, vid{k}(m), 1).';
+      ss = csex(k, vid{k}(m), 2).';
       x0 = V(vid{k}(m), 1);
       y0 = V(vid{k}(m), 2);
       ddx = sh.x(m) - x0;
       ddy = sh.y(m) - y0;
-      xr = x0 + cos(th).*ddx - sin(th).*ddy;
-      yr = y0 + sin(th).*ddx + cos(th).*ddy;
+      xr = x0 + cc.*ddx - ss.*ddy;
+      yr = y0 + ss.*ddx + cc.*ddy;
       [cxr, cyr] = geo{o}.cpf(xr, yr);
       t{k}(m) = geo{o}.parfun(cxr, cyr);
     end
@@ -986,12 +1019,13 @@ function tau = cp_tangent(s, v, scheme)
 end
 
 
-function out = vgmm_solve(br, theta, x1d, y1d, p, dim, a, b, cen, ufun, ffun)
+function out = vgmm_solve(br, cs, x1d, y1d, p, dim, a, b, cen, ufun, ffun)
 %VGMM_SOLVE  assemble and solve u - laplacian_S u = f the vGMM way
 %   br is one branch (the uncut curve, the baseline) or two (the glued
 %   halves).  With two branches, the band nodes sitting at a cut point
-%   are rotated about it by theta(k,j) -- k the branch, j the cut point
-%   -- and then extended by interpolating on the other branch, which is
+%   are rotated about it by the rotation whose cosine and sine are
+%   cs(k,j,1) and cs(k,j,2) -- k the branch, j the cut point -- and then
+%   extended by interpolating on the other branch, which is
 %   the same glue the iCPM script uses and lands in the same place: the
 %   off-diagonal block E_{k,o} of the extension.
 %
@@ -1030,13 +1064,16 @@ function out = vgmm_solve(br, theta, x1d, y1d, p, dim, a, b, cen, ufun, ffun)
     if isempty(rows)
       error('no rows to route across the cut on branch %d', k);
     end
-    th = theta(k, br{k}.vid(rows)).';
+    % the glue pair is applied as it was built; there is no angle in the
+    % loop and so no cos/sin to undo an atan2 with
+    cc = cs(k, br{k}.vid(rows), 1).';
+    ss = cs(k, br{k}.vid(rows), 2).';
     x0 = br{k}.cpx(rows);        % the cut point itself
     y0 = br{k}.cpy(rows);
     ddx = br{k}.x(rows) - x0;
     ddy = br{k}.y(rows) - y0;
-    xr = x0 + cos(th).*ddx - sin(th).*ddy;
-    yr = y0 + sin(th).*ddx + cos(th).*ddy;
+    xr = x0 + cc.*ddx - ss.*ddy;
+    yr = y0 + ss.*ddx + cc.*ddy;
 
     % A wrong rotation can push a row back across the normal line, and
     % its closest point on the other half is then clamped to the cut

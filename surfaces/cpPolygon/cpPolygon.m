@@ -11,9 +11,8 @@ function [cpx, cpy, sdist] = cpPolygon(x, y, poly)
 %
 %   If you leave off poly it will use a default one.
 %
-%   Note: returns signed distance (with negative inside).
-%   TODO: currently sign of signed distance seems to depend on
-%   orientation of the bdy: should fix that!
+%   Note: returns signed distance (with negative inside).  The sign
+%   does not depend on the orientation (CW or CCW) of 'poly'.
 %
 %   Uses code by Tom Maerz.
 

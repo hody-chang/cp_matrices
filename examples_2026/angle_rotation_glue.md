@@ -70,31 +70,82 @@ belongs to `geo.vertices(iv,:)` for **both** branches. This permutation is essen
 branches traverse in opposite directions, so without it the left and right arcs disagree
 about which row is the top vertex, and the glue silently pairs the wrong tangents.
 
-### Step 2: the glue angle
+### Step 2: the glue rotation
 
-`glue_angle` returns the directed rotation carrying the source's outward tangent onto the
-target's inward tangent $-\tau_{out}^{target}$:
+`glue_rot2d` (in `rotations/`) returns the rotation carrying the source's outward tangent
+$u = \tau_{out}^{source}$ onto the target's inward tangent $w = -\tau_{out}^{target}$. It
+returns that rotation as a $(\cos\theta, \sin\theta)$ pair and never forms the angle:
+
+```matlab
+c = u(1)*w(1) + u(2)*w(2);        % cos: the dot product
+s = u(1)*w(2) - u(2)*w(1);        % sin: the cross product's e_z component
+n = hypot(c, s);  c = c/n;  s = s/n;
+R = [c -s; s c];
+```
+
+This is Rodrigues' rotation formula $R = I + \sin\theta\,K + (1-\cos\theta)K^2$
+specialized to the plane: the rotation axis is $e_z$, whose skew matrix restricted to the
+plane is $K = \bigl[\begin{smallmatrix}0&-1\\1&0\end{smallmatrix}\bigr]$ with
+$K^2 = -I$, so the formula collapses to $R = \cos\theta\,I + \sin\theta\,K$. It is the
+same construction `angle3D.m` uses in three dimensions, so the 2D and 3D glues are one
+construction rather than two.
+
+Outward to inward is the correct pairing: leaving the source arc at the vertex means
+entering the target arc. Only four rotations exist per level (2 branches x 2 vertices);
+they are computed once, outside the row loop, under `use = vids == iv`.
+
+For this geometry the interior angle at each vertex is 102.8-110.5 degrees, so the glue
+rotation is 69.5-77.2 degrees in magnitude. It is the turning angle of the curve at the
+junction.
+
+**Why not through an angle.** The earlier form of this step was
 
 ```matlab
 angle = atan2(-tauout_target(2), -tauout_target(1)) - ...
         atan2(tauout_source(2), tauout_source(1));
 angle = atan2(sin(angle), cos(angle));            % rewrap to (-pi, pi]
+R = [cos(angle) -sin(angle); sin(angle) cos(angle)];
 ```
 
-Outward to inward is the correct pairing: leaving the source arc at the vertex means
-entering the target arc. Only four angles exist per level (2 branches x 2 vertices); they
-are computed once, outside the row loop, under `use = vids == iv`.
+which reaches the same matrix through six library transcendental calls where the
+construction above uses none; the angle is an intermediate that `cos` and `sin`
+immediately undo. `example_ellipse_cut_rotation_construction.m` measures the difference on
+the cut ellipse. In brief:
 
-For this geometry the interior angle at each vertex is 102.8-110.5 degrees, so the glue
-angle is 69.5-77.2 degrees in magnitude. It is the turning angle of the curve at the junction.
+- **Accuracy.** Against a rotation known to full precision, $\|R - R_{exact}\|$ comes out
+  two to seven times larger for the angle-first path at every angle sampled over a full
+  turn, four times larger at the median; worst case over that sweep,
+  $1.2\times 10^{-15}$ against $2.8\times 10^{-16}$. Both stay within a few units in the
+  last place, so this does not reach the solution: on the cut ellipse the two
+  constructions move the computed $u$ by at most $4\times 10^{-13}$ relative, against a
+  tangent-estimator error larger by a factor of at least $5\times 10^{10}$.
+- **No branch cut.** The difference of two `atan2` values lands in $(-2\pi, 2\pi]$ and has
+  to be wrapped back, so the stored datum is discontinuous at $\pm\pi$ even though the
+  rotation it stands for is not. A $(\cos, \sin)$ pair has no such seam, which is what
+  lets `rot2d_err` compare two glues through their relative rotation instead of through a
+  wrapped difference of angles.
+- **Exact inverses.** Swapping the two tangents gives the other branch's glue at the same
+  vertex. Under Rodrigues the cosine comes out bit for bit the same and the sine bit for
+  bit negated, so the two branches' rotations are *exact* transposes; the angle-first path
+  satisfies that only to within rounding.
+- **Reproducibility.** IEEE 754 pins down multiply, add, divide and `hypot` but says
+  nothing about `atan2`, `sin` or `cos`, so the angle-first matrix can differ in its last
+  bits between platforms, libm versions and MATLAB releases. Dot, cross and `hypot`
+  cannot.
+- **Cost.** About 2.4x faster in the measurement above, which does not matter: four
+  rotations per level.
 
 ### Step 3: rotate the grid node, not its closest point
 
 ```matlab
 rows = find(br(source).vid ~= 0);                     % cap rows
 xq   = [br(source).xout(rows), br(source).yout(rows)];% Cartesian grid nodes
-qmap(use,:) = rotate_about(xq(use,:), geo.vertices(iv,:), a);
+[cc, ss] = glue_rot2d(tauout_source, tauout_target);
+qmap(use,:) = rotate_about2d(xq(use,:), geo.vertices(iv,:), cc, ss);
 ```
+
+`rotate_about2d` takes the pair, not an angle, for the same reason: an angle argument would
+have to be turned back into a cosine and a sine at every call site.
 
 `vid` is set in `setup_branch` by matching `cpxout/cpyout` against the vertex list to
 `100*eps`; a row with `bdyout ~= 0` and `vid == 0` is an error. The rotated object is the
@@ -180,7 +231,9 @@ $R_{right} \to R_{left}$, while the arclength control stays at rate 2 throughout
    independent of traversal direction. See the `norm(vstart - [0 abs(vstart(2))])` test in
    `make_branch`.
 2. **Outward to inward, not outward to outward.** Off by $\pi$ otherwise, which still
-   produces a plausible-looking band and a wrong answer.
+   produces a plausible-looking band and a wrong answer. `glue_rot2d` negates the target
+   tangent itself, so pass both tangents outward; `rot2d_from_to` is the unnegated form for
+   the cases where the caller already has the two directions the way it wants them.
 3. **Rotate nodes, not closest points.**
 4. **Reparametrize the forcing for routed rows.**
 5. **Zero the diagonal block on routed rows** before adding the off-diagonal block, or the

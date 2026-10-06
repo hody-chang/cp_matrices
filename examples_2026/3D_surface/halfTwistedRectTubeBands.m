@@ -30,7 +30,8 @@ function [geo, P] = halfTwistedRectTubeBands(h, P)
 %   B(br) per branch (branch, width, iband, oband, ni, no, R, Ldiag, Loff,
 %   x, y, z, cpx, cpy, cpz, bdy, theta, s on the outer band, self E),
 %   route{src} cached routing targets of the routed rows of branch src
-%   (node = grid index, sg, phi_exact, phi_dk2, probe, signflip, cpE, cpD
+%   (node = grid index, sg, cs_exact, cs_dk2, phi_exact, phi_dk2,
+%    angerr_dk2, probe, signflip, cpE, cpD
 %   with columns [cpx cpy cpz theta s] on the target branch),
 %   closure_iter, samples{br} and traces{br} (structs with theta, s: the
 %   surface-error grid and the corner-curve trace samples of branch br),
@@ -40,6 +41,7 @@ function [geo, P] = halfTwistedRectTubeBands(h, P)
   addpath(fullfile(here, '..', '..', 'cp_matrices'));
   addpath(fullfile(here, '..', '..', 'surfaces'));
   addpath(fullfile(here, '..', 'surfaces'));
+  addpath(fullfile(here, '..', 'rotations'));
   addpath(here);
 
   if (nargin < 2 || isempty(P))
@@ -340,28 +342,41 @@ function Rt = route_targets(S, rows, src, tgt, geo, P)
   if (max(vecnorm(Fc_t - c, 2, 2)) > 1e-9)
     error('Glued target edge point does not match the source edge point.');
   end
-  phi_exact = signed_angle(eta_s, -eta_t, tau);
+  % the glue rotation as a (cos, sin) pair, which is what Rodrigues'
+  % formula consumes; the angles below are derived from the pairs for
+  % reporting and are not used to rotate anything
+  [ce, se] = signed_rot(eta_s, -eta_t, tau);
 
   [es_hat, probe, signflip] = dk2_source(c, x, th, tau, eta_s, src, h, P);
   et_hat = dk2_target(Fc_t, th_t, tau, eta_t, tgt, h, P);
-  phi_dk2 = signed_angle(es_hat, -et_hat, tau);
+  [cd, sd] = signed_rot(es_hat, -et_hat, tau);
 
   Rt.node = S.oband(rows);
   Rt.sg = sg;
-  Rt.phi_exact = phi_exact;
-  Rt.phi_dk2 = phi_dk2;
+  Rt.cs_exact = [ce se];
+  Rt.cs_dk2 = [cd sd];
+  Rt.phi_exact = atan2(se, ce);
+  Rt.phi_dk2 = atan2(sd, cd);
+  % the error of the estimated rotation against the exact one, as the angle
+  % of the relative rotation about the shared axis tau.  Both rotations are
+  % about the same axis, so this is the planar comparison rot2d_err makes:
+  % it lands in (-pi, pi] by construction, with no difference of two angles
+  % to rewrap.
+  Rt.angerr_dk2 = abs(rot2d_err(cd, sd, ce, se));
   Rt.probe = probe;
   Rt.signflip = signflip;
-  Rt.cpE = rotated_target_cp(x, c, tau, phi_exact, tgt, P);
-  Rt.cpD = rotated_target_cp(x, c, tau, phi_dk2, tgt, P);
+  Rt.cpE = rotated_target_cp(x, c, tau, ce, se, tgt, P);
+  Rt.cpD = rotated_target_cp(x, c, tau, cd, sd, tgt, P);
 end
 
 
-function cp = rotated_target_cp(x, c, tau, phi, tgt, P)
-%ROTATED_TARGET_CP  rotate x about the axis (c, tau) by phi and project
-%   onto the target branch
+function cp = rotated_target_cp(x, c, tau, cth, sth, tgt, P)
+%ROTATED_TARGET_CP  rotate x about the axis (c, tau) and project onto the
+%   target branch
+%   cth and sth are the cosine and sine of the rotation, as signed_rot
+%   built them.
 
-  xr = c + rodrigues(x - c, tau, phi);
+  xr = c + rodrigues(x - c, tau, cth, sth);
   [cx, cy, cz, ~, ~, tht, st] = ...
       cpHalfTwistedRectTube(xr(:,1), xr(:,2), xr(:,3), P.R, P.a, P.b, tgt);
   cp = [cx cy cz tht st];
@@ -373,7 +388,9 @@ end
 
 function R = empty_routes()
   R = struct('node', zeros(0, 1), 'sg', zeros(0, 1), ...
+             'cs_exact', zeros(0, 2), 'cs_dk2', zeros(0, 2), ...
              'phi_exact', zeros(0, 1), 'phi_dk2', zeros(0, 1), ...
+             'angerr_dk2', zeros(0, 1), ...
              'probe', false(0, 1), 'signflip', false(0, 1), ...
              'cpE', zeros(0, 5), 'cpD', zeros(0, 5));
 end
@@ -463,14 +480,35 @@ function w = perp(v, tau)
   w = v - sum(v.*tau, 2).*tau;
 end
 
-function phi = signed_angle(u, w, tau)
-%SIGNED_ANGLE  angle about tau taking u onto w (both orthogonal to tau)
-  phi = atan2(sum(tau.*cross(u, w, 2), 2), sum(u.*w, 2));
+function [c, s] = signed_rot(u, w, tau)
+%SIGNED_ROT  the rotation about tau taking u onto w, as a (cos, sin) pair
+%   u and w are rows orthogonal to the unit axes tau.  Rodrigues' formula
+%   needs the cosine and sine of the angle, not the angle, and both are
+%   already here: the cosine IS the dot product of u and w, and the sine IS
+%   the component of their cross product along tau.  Forming
+%   atan2(sin, cos) and then taking cos and sin of that again is a round
+%   trip through three library transcendentals that cancel each other, and
+%   it costs accuracy -- see ../rotations/rot2d_from_to.m, and
+%   ../2D_curve/example_ellipse_cut_rotation_construction.m for the
+%   measurement in the planar case.
+%
+%   The pair is normalized by its own hypot, since u and w are unit only to
+%   within rounding.  An angle, where one is wanted for a report, is
+%   atan2(s, c) of the pair.
+
+  c = sum(u.*w, 2);
+  s = sum(tau.*cross(u, w, 2), 2);
+  n = hypot(c, s);
+  c = c ./ n;
+  s = s ./ n;
 end
 
-function vr = rodrigues(v, k, phi)
-%RODRIGUES  rotate rows of v about unit axes k by angles phi
-  c = cos(phi);  s = sin(phi);
+function vr = rodrigues(v, k, c, s)
+%RODRIGUES  rotate rows of v about unit axes k, from a (cos, sin) pair
+%   c and s come from signed_rot, which never forms the angle.  Taking the
+%   pair rather than an angle is the point: an angle argument would have to
+%   be turned back into a cosine and a sine here.
+
   vr = v.*c + cross(k, v, 2).*s + k.*(sum(k.*v, 2).*(1 - c));
 end
 

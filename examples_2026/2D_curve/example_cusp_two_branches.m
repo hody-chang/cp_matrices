@@ -12,7 +12,9 @@
 % radius nor the usual smooth-endpoint second-order argument applies there.
 % d_{k2} names the estimator, not a promised convergence order at this cusp.
 
-addpath(fullfile(fileparts(mfilename('fullpath')), '..', '..', 'cp_matrices'));
+here = fileparts(mfilename('fullpath'));
+addpath(fullfile(here, '..', '..', 'cp_matrices'));
+addpath(fullfile(here, '..', 'rotations'));
 
 %% Geometry and intrinsic orientation
 % With 0 <= t <= pi/2, x=sin(t)^2 and y=+/-sin(t)^3*cos(t).
@@ -231,9 +233,13 @@ function [out,ubr] = solve_rotation(br,vertices,p,estimated,ffun)
       rows = find(br{source}.vid == iv);
       if isempty(rows), error('no endpoint rows for branch %d, vertex %d',source,iv); end
       out.ncross(source,iv) = numel(rows);
-      th = glue_angle(tau{source}(iv,:),tau{target}(iv,:));
-      out.theta(source,iv) = th;
-      q = rotate_about([br{source}.xout(rows),br{source}.yout(rows)],vertices(iv,:),th);
+      % Rodrigues' formula about the out-of-plane axis gives the rotation
+      % as a (cos, sin) pair straight from the two tangents; it is applied
+      % as built, and the angle below is recorded for reporting only.
+      [cc,ss] = glue_rot2d(tau{source}(iv,:),tau{target}(iv,:));
+      out.theta(source,iv) = atan2(ss,cc);
+      q = rotate_about2d([br{source}.xout(rows),br{source}.yout(rows)], ...
+                         vertices(iv,:),cc,ss);
       [cx,cy] = br{target}.geo.cpf(q(:,1),q(:,2));
       Eb{source,target}(rows,:) = branch_interp(br{target},cx,cy,p);
       Eb{source,source}(rows,:) = 0;
@@ -292,13 +298,6 @@ function s = setup_branch(x1d, y1d, xx, yy, h, p, order, bw, branch, vertices)
   end
 end
 
-function angle = glue_angle(tauout_source, tauout_target)
-%GLUE_ANGLE Directed rotation from source outward tangent to negative target outward tangent.
-  angle = atan2(-tauout_target(2), -tauout_target(1)) - ...
-          atan2(tauout_source(2), tauout_source(1));
-  angle = atan2(sin(angle), cos(angle));
-end
-
 function tau = cp_tangent_dk2(br, v)
 %CP_TANGENT_DK2 Estimate an outward endpoint tangent from second-order CP differences.
 % br is one branch band and v is one of its exact endpoint coordinates.
@@ -316,11 +315,5 @@ function tau = cp_tangent_dk2(br, v)
   if ~any(good), error('d_{k2} gave no usable endpoint tangent'); end
   tau = [mean(dvx(good)./nrm(good)), mean(dvy(good)./nrm(good))];
   tau = tau/norm(tau);
-end
-
-function q = rotate_about(x, v, angle)
-%ROTATE_ABOUT Rigidly rotate row points x about vertex v by angle radians.
-  c = cos(angle); s = sin(angle); d = x - v;
-  q = v + [c*d(:,1) - s*d(:,2), s*d(:,1) + c*d(:,2)];
 end
 

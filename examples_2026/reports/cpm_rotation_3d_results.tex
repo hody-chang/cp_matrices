@@ -1,0 +1,131 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{arrows,positioning,calc}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+% figs/ holds pinned copies, so a later re-run of the scripts cannot
+% change the figures this report was built from.
+\graphicspath{{figs/}{../figs/}}
+
+\captionsetup{font=small,labelfont=bf}
+\setlist{nosep,leftmargin=1.4em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small CPM with angle rotation: two 3D junction tests}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\dk}{\delta\kappa}
+\newcommand{\Linf}{L_\infty}
+
+\title{\vspace{-1.2cm}
+  Closest point method with an angle rotation glue:\\
+  convergence of the $\Linf$ error on two creased surfaces\\[2mm]
+  \large The flipped cap on an ellipsoid, and the half-twisted
+  rectangular tube}
+\author{Results from \texttt{cp\_matrices/examples\_2026/3D\_surface}}
+\date{\today}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstract}
+\noindent
+This report explains two three-dimensional tests of the closest point
+method with an angle rotation glue at a surface junction. Both tests
+solve $u-\Delta_S u = f$ on a surface made of two branches that meet
+along a closed curve. The first test cuts an ellipsoid along a circle and
+folds the cap inside the bowl, which makes a crease along the whole
+circle. The second test splits a half-twisted rectangular tube into two
+strips along both of its corner curves. The report describes how the grid
+and the two bands are built, how the glue rotation is found and applied,
+and how the discrete operator is formed. It then gives the measured
+$\Linf$ convergence rates. \textbf{Headline result:} neither surface
+recovers the second-order rate of a smooth closest point solve. Every
+fitted rate lies between $1.2$ and $1.8$. On the flipped ellipsoid the
+\emph{size} of the error at a fixed grid spacing grows with the curvature
+mismatch $\dk$ at the crease, although the fitted rate does not order by
+$\dk$ over the number of levels run here. Without the glue, the same
+solve does not converge at all. On both surfaces the rotation may be
+estimated from closest point differences alone, at no cost in the
+solution, and the junction transmission converges faster than the
+solution does.
+\end{abstract}
+
+\tableofcontents
+
+\section{Summary of the results}
+\label{sec:summary}
+
+\input{results_summary}
+
+\input{methods_body}
+
+\section{Results: the flipped cap on an ellipsoid}
+\label{sec:ellres}
+
+\input{results_ellipsoid}
+
+\section{Results: the half-twisted rectangular tube}
+\label{sec:tuberes}
+
+\input{results_tube}
+
+\section{What the two tests say together}
+\label{sec:together}
+
+\input{results_discussion}
+
+\input{results_synthesis}
+
+\section{How to reproduce}
+\label{sec:repro}
+
+\input{results_repro}
+
+\begin{thebibliography}{9}
+
+\bibitem{vGMM2013}
+I.~von Glehn, T.~M\"arz and C.~B.~Macdonald.
+\newblock An embedded method-of-lines approach to solving partial
+  differential equations on surfaces.
+\newblock 2013.
+
+\bibitem{RuuthMerriman2008}
+S.~J.~Ruuth and B.~Merriman.
+\newblock A simple embedding method for solving partial differential
+  equations on surfaces.
+\newblock \emph{J.~Comput.~Phys.}, 2008.
+\newblock (the bandwidth formula)
+
+\bibitem{MMC2026}
+T.~M\"arz, C.~B.~Macdonald and Y.~Chen.
+\newblock Consistency and stability of closest point iterations.
+\newblock Draft.
+
+\bibitem{MMC2026b}
+T.~M\"arz, C.~B.~Macdonald and Y.~Chen.
+\newblock Closest point rotation across a shared surface edge: local
+  proofs and conditional convergence in $\mathbb{R}^3$.
+\newblock Draft, \texttt{output/pdf/cpm\_surface\_edge\_analysis.pdf}.
+\newblock Theorem~6.4 is the bound quoted in this report;
+  Assumption~6.3 is the discrete stability it is conditional on;
+  Proposition~7.1 is what the uncut baseline measures.
+
+\end{thebibliography}
+
+\end{document}

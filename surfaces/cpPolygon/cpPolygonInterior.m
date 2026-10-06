@@ -15,15 +15,16 @@ function [cpx, cpy, dist, bdy] = cpPolygonInterior(x, y, poly, inOutToggle)
 %
 %   Uses code by Tom Maerz.
 %
-%   TODO: BUG BUG BUG: sign seems to depend on orientation, talk to
-%   Tom, in the meantime, you can pass inOutToggle to swap the
-%   sign.
+%   The sign of the underlying signed distance no longer depends on
+%   the orientation of 'poly', so 'inOutToggle' should not be needed;
+%   it is kept because it is still a handy way to swap inside for
+%   outside.
 %
 %   TODO: what should paramPolygonInterior do?
 
   % defaults
   if (nargin < 3)
-    poly = default_poly();
+    poly = makePolyDefault();
   end
   if (nargin < 4)
     inOutToggle = 0;
@@ -32,7 +33,6 @@ function [cpx, cpy, dist, bdy] = cpPolygonInterior(x, y, poly, inOutToggle)
   [cpx,cpy] = helper_CPopPoly(x, y, poly);
   sdist = helper_sDistPoly(x, y, poly);
 
-  % BUG BUG BUG: sign seems to depend on orientation, talk to Tom
   sdist = (-1)^(inOutToggle+1) * sdist;
 
   bdy = (sdist > 0);

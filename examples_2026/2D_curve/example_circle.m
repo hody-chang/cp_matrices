@@ -13,6 +13,7 @@ here = fileparts(mfilename('fullpath'));
 addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 
 global ICPM2009BANDINGCHECKS
@@ -143,23 +144,24 @@ xginB = RB*xgoutB;  yginB = RB*ygoutB;
 
 % Endpoint ids follow cpArc: bdy=1 is angle1, bdy=2 is angle2.
 % The smooth cut-circle prototype has zero tangent mismatch, but these
-% stored angles are still used below in the row routing.
-thetaAtoB = zeros(2,1);
-thetaBtoA = zeros(2,1);
-
+% stored rotations are still applied below in the row routing.
 tangentA = [-sin(angleA1) cos(angleA1); ...
             -sin(angleA2) cos(angleA2)];
 tangentB = [-sin(angleB1) cos(angleB1); ...
             -sin(angleB2) cos(angleB2)];
 
-thetaAtoB(1) = angle(exp(1i*(atan2(tangentB(2,2),tangentB(2,1)) - ...
-                             atan2(tangentA(1,2),tangentA(1,1)))));
-thetaAtoB(2) = angle(exp(1i*(atan2(tangentB(1,2),tangentB(1,1)) - ...
-                             atan2(tangentA(2,2),tangentA(2,1)))));
-thetaBtoA(1) = angle(exp(1i*(atan2(tangentA(2,2),tangentA(2,1)) - ...
-                             atan2(tangentB(1,2),tangentB(1,1)))));
-thetaBtoA(2) = angle(exp(1i*(atan2(tangentA(1,2),tangentA(1,1)) - ...
-                             atan2(tangentB(2,2),tangentB(2,1)))));
+% Each rotation is built from the pair of tangents by Rodrigues' formula
+% about the out-of-plane axis, which in the plane is just the cosine from
+% their dot product and the sine from their cross product.  No angle is
+% formed, so the (cos, sin) pairs below are what the row routing applies
+% directly; the angles are derived from them only for the printout.  See
+% rot2d_from_to.  Both arcs are traversed counterclockwise here, so these
+% tangents already point the way the routing needs and nothing is negated.
+[cAtoB, sAtoB] = rot2d_from_to(tangentA, tangentB([2 1],:));
+[cBtoA, sBtoA] = rot2d_from_to(tangentB, tangentA([2 1],:));
+
+thetaAtoB = atan2(sAtoB, cAtoB);
+thetaBtoA = atan2(sBtoA, cBtoA);
 
 endpointA1 = cen + RADIUS*[cos(angleA1) sin(angleA1)];
 endpointA2 = cen + RADIUS*[cos(angleA2) sin(angleA2)];
@@ -185,24 +187,26 @@ EAB = sparse(length(outerbandA), length(innerbandB));
 EBA = sparse(length(outerbandB), length(innerbandA));
 
 if (~isempty(crossrowsA))
-  th = thetaAtoB(endptidA(crossrowsA));
+  cc = cAtoB(endptidA(crossrowsA));
+  ss = sAtoB(endptidA(crossrowsA));
   x0 = cpxgoutA(crossrowsA);  y0 = cpygoutA(crossrowsA);
   dx0 = xgoutA(crossrowsA) - x0;
   dy0 = ygoutA(crossrowsA) - y0;
-  xr = x0 + cos(th).*dx0 - sin(th).*dy0;
-  yr = y0 + sin(th).*dx0 + cos(th).*dy0;
+  xr = x0 + cc.*dx0 - ss.*dy0;
+  yr = y0 + ss.*dx0 + cc.*dy0;
   [cpxAtoB, cpyAtoB] = cpArc(xr, yr, RADIUS, cen, angleB1, angleB2);
   EAB(crossrowsA,:) = interp2_matrix(x1d, y1d, cpxAtoB, cpyAtoB, p, innerbandB);
   EAA(crossrowsA,:) = 0;
 end
 
 if (~isempty(crossrowsB))
-  th = thetaBtoA(endptidB(crossrowsB));
+  cc = cBtoA(endptidB(crossrowsB));
+  ss = sBtoA(endptidB(crossrowsB));
   x0 = cpxgoutB(crossrowsB);  y0 = cpygoutB(crossrowsB);
   dx0 = xgoutB(crossrowsB) - x0;
   dy0 = ygoutB(crossrowsB) - y0;
-  xr = x0 + cos(th).*dx0 - sin(th).*dy0;
-  yr = y0 + sin(th).*dx0 + cos(th).*dy0;
+  xr = x0 + cc.*dx0 - ss.*dy0;
+  yr = y0 + ss.*dx0 + cc.*dy0;
   [cpxBtoA, cpyBtoA] = cpArc(xr, yr, RADIUS, cen, angleA1, angleA2);
   EBA(crossrowsB,:) = interp2_matrix(x1d, y1d, cpxBtoA, cpyBtoA, p, innerbandA);
   EBB(crossrowsB,:) = 0;

@@ -29,3 +29,11 @@ python/build
 
 #Mac
 .DS_Store
+# LaTeX build byproducts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk

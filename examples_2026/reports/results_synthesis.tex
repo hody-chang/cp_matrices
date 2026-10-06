@@ -1,0 +1,93 @@
+\subsection{The two surfaces are different tests of the same thing}
+
+The two surfaces differ in nearly every way that could matter, which is
+what makes the agreement between them useful.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+ & flipped ellipsoid & half-twisted tube \\
+\midrule
+junction      & one plane circle & two closed non-planar curves \\
+glue angle    & one angle for the whole circle
+              & varies along each curve \\
+operator      & vGMM, $M = EL - \gamma(I-E)$
+              & diagonally split ICPM \\
+solve         & matrix-free GMRES
+              & direct, then matrix-free GMRES \\
+$J_2$         & zero, both terms separately
+              & nonzero in general \\
+estimators    & $d_k$ and $d_{k2}$, fully geometry-free
+              & $d_{k2}$, with analytic axis and probes \\
+scatter in $h$ & large & none \\
+fitted rate   & 1.23 to 1.80 & 1.43 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+They agree on the three things that matter. First, the rate is between
+first and second order and nearer to first. Second, the glue rotation may
+be estimated rather than computed, at no cost in the solution. Third, the
+junction transmission converges faster than the solution does.
+
+\subsection{Why the ellipsoid scatters and the tube does not}
+
+This is the sharpest contrast in the study, and it is worth stating
+plainly, because it changes how each table must be read.
+
+On the ellipsoid the junction is a circle in a plane, and the glue
+rotation is one angle for every point of it. Each branch therefore
+contributes a junction residual of one sign at every azimuth, and the two
+contributions very nearly cancel. What survives is set by where the
+circle falls between grid planes. That changes with $h$ in a way that has
+nothing to do with accuracy, so neighbouring levels differ by a factor of
+several.
+
+On the tube neither corner curve is planar, and the twist makes the glue
+angle vary along both. The residuals do not line up in azimuth, nothing
+near-cancels, and the error is monotone in $h$ at every level.
+
+The practical consequence: a convergence study on a surface of revolution
+cut by a plane needs many more levels than one on a generic surface. The
+ellipsoid script's choice of ten grid spacings is not conservatism.
+
+\subsection{What would settle the open question}
+
+The one experiment that would separate the two candidate explanations is
+already in the script and was not run here: the \emph{unflipped} cut.
+
+On the unflipped surface the two pieces join smoothly, the exact glue
+rotation is the identity, and $\dk$ vanishes identically. The bound then
+reads $C\{h^2 + \varepsilon_R\}$, and the glued solve should recover the
+second-order rate of the uncut one. If it does, then the order lost on
+the flipped surface is the \emph{crease}, and the glue itself is
+second-order accurate. If it does not, then the glue construction costs
+an order by itself, independently of the geometry it is applied to.
+
+Nothing in this report distinguishes those two possibilities, because
+every cut studied here has $\dk$ between $2.07$ and $3.07$ and none has
+$\dk = 0$.
+
+Two smaller follow-ups are worth the same note:
+
+\begin{itemize}
+  \item \textbf{More levels on the ellipsoid.} The script's own default
+        of ten would make the four fitted rates comparable with one
+        another. At six levels they are not.
+  \item \textbf{Finer levels on the tube.} Its level rates were still
+        falling at $h=1/44$. One or two more levels would show whether
+        they settle at first order or continue down.
+\end{itemize}
+
+\subsection{A note on the construction, separate from the results}
+
+The $(\cos,\sin)$ construction of the rotation is a correctness and
+reproducibility choice, not an accuracy one. The measured difference
+against the \texttt{atan2} path is a few units in the last place, and the
+planar companion experiment shows it does not reach the computed
+solution. What it does buy is exact: the two branches' rotations at a
+junction come out as bit-for-bit transposes, there is no branch cut at
+$\pm\pi$ for a stored angle to fall across, and every operation is one
+that IEEE~754 pins down. Those properties hold regardless of the rates in
+this report.

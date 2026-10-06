@@ -103,6 +103,7 @@ here = fileparts(mfilename('fullpath'));
 addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 
 %% Parameters
@@ -479,12 +480,16 @@ function [out, ubr] = assemble_solve(geo, br, x1d, y1d, p, glue, ffun)
       if ~any(use), continue; end
       switch glue
         case 'exactR'
-          a = glue_angle(br(source).geo.tauout(iv,:), br(target).geo.tauout(iv,:));
-          qmap(use,:) = rotate_about(xq(use,:), geo.vertices(iv,:), a);
+          % Rodrigues about the out-of-plane axis: the rotation comes out
+          % of the two tangents as a (cos, sin) pair and is applied as
+          % built, with no angle formed in between.  See glue_rot2d.
+          [cc, ss] = glue_rot2d(br(source).geo.tauout(iv,:), ...
+                                br(target).geo.tauout(iv,:));
+          qmap(use,:) = rotate_about2d(xq(use,:), geo.vertices(iv,:), cc, ss);
         case {'dk', 'dk2'}
-          a = glue_angle(squeeze(tauhat(source,iv,:)).', ...
-                         squeeze(tauhat(target,iv,:)).');
-          qmap(use,:) = rotate_about(xq(use,:), geo.vertices(iv,:), a);
+          [cc, ss] = glue_rot2d(squeeze(tauhat(source,iv,:)).', ...
+                                squeeze(tauhat(target,iv,:)).');
+          qmap(use,:) = rotate_about2d(xq(use,:), geo.vertices(iv,:), cc, ss);
         case 'ideal'
           qmap(use,:) = map_by_arclength(xq(use,:), geo.vertices(iv,:), ...
               br(source).geo, br(target).geo, br(source).geo.tauout(iv,:), ...
@@ -547,23 +552,6 @@ function [tau, xi] = cp_tangent_pt(br, v, scheme)
   end
   tau = [dvx dvy]/nrm;
   xi = (x - v(1))*tau(1) + (y - v(2))*tau(2);   % tangential offset of x
-end
-
-
-function angle = glue_angle(tauout_source, tauout_target)
-%GLUE_ANGLE  Directed rotation from the source outward tangent to the
-%   negative target outward tangent.  Zero on a smooth (tangent-opposite)
-%   join; nonzero at a corner.
-  angle = atan2(-tauout_target(2), -tauout_target(1)) - ...
-          atan2(tauout_source(2), tauout_source(1));
-  angle = atan2(sin(angle), cos(angle));
-end
-
-
-function q = rotate_about(x, v, angle)
-%ROTATE_ABOUT  Rigidly rotate row points x about vertex v by angle radians.
-  c = cos(angle); s = sin(angle); d = x - v;
-  q = v + [c*d(:,1) - s*d(:,2), s*d(:,1) + c*d(:,2)];
 end
 
 

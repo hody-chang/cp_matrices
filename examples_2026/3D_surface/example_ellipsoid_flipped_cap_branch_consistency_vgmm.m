@@ -168,6 +168,7 @@ addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
 addpath(fullfile(here, '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 
 %% Parameters
@@ -336,10 +337,14 @@ for ci = 1:length(zcut_list)
   if flipped
     tauex(2,2) = -tauex(2,2);
   end
-  thetaex = glue_angles(tauex(1,:), tauex(2,:));
+  % the glue is stored as the (cos, sin) pair Rodrigues' formula gives
+  % from the tangents, never as an angle; thetaex is derived from it for
+  % the report and for the curvature mismatch below
+  csex = glue_cs(tauex(1,:), tauex(2,:));
+  thetaex = cs_angle(csex);
   % thetaex(2) is branch 2's rotation, the one that carries its frame onto
   % branch 1's continuation, which is the R the mismatch is measured with
-  [dkappa, dkmean] = curvature_mismatch(phic, thetaex(2), a, c, flipped);
+  [dkappa, dkmean] = curvature_mismatch(phic, csex(2,:), a, c, flipped);
 
   err = nan(nvar+1, nh);    % surface L_inf error, baseline then the three
   gap = nan(nvar, nh);      % max |e_A - e_B| at the shared rotated nodes
@@ -382,7 +387,7 @@ for ci = 1:length(zcut_list)
     clear swhole outw
 
     %% The nodes the two branches have in common
-    sh = shared_points(br, geo, a, c, cen, thetaex);
+    sh = shared_points(br, geo, a, c, cen, csex);
     nrot(k) = sum(sh.rot);
     nshare(k) = length(sh.i1);
     if (nrot(k) == 0)
@@ -393,17 +398,22 @@ for ci = 1:length(zcut_list)
     %% The glue rotation each scheme produces
     % thetamax is the error in the angle, |theta - theta_exact|, not
     % |theta| itself: on the flipped surface the exact angle is not zero.
-    theta = zeros(2, nvar);      % (branch, variant)
-    theta(:,nvar) = thetaex;     % the last variant is the exact rotation
+    cs = zeros(2, 2, nvar);      % (branch, [cos sin], variant)
+    cs(:,:,nvar) = csex;         % the last variant is the exact rotation
     for scheme = 1:2
       tau = [cp_tangent(br{1}, cen, scheme); cp_tangent(br{2}, cen, scheme)];
-      theta(:,scheme) = glue_angles(tau(1,:), tau(2,:));
-      thetamax(scheme,k) = max(abs(wrapangle(theta(:,scheme) - thetaex)));
+      cs(:,:,scheme) = glue_cs(tau(1,:), tau(2,:));
+      % the angle of the relative rotation R_exact' * R, which is in
+      % (-pi, pi] by construction: no difference of two angles and no
+      % rewrap.  See ../rotations/rot2d_err.m.
+      thetamax(scheme,k) = ...
+          max(abs(rot2d_err(cs(:,1,scheme), cs(:,2,scheme), ...
+                            csex(:,1), csex(:,2))));
     end
 
     %% Solve, once per variant, and compare the branches node by node
     for iv = 1:nvar
-      out = vgmm_solve(br, theta(:,iv), x1d, y1d, z1d, p, dim, a, c, cen, ...
+      out = vgmm_solve(br, cs(:,:,iv), x1d, y1d, z1d, p, dim, a, c, cen, ...
                        ufun, ffun, itertol, gmres_restart, gmres_maxit);
       if (out.rowsum > 1e-10)
         error('extension matrix rows do not sum to one (%g)', out.rowsum);
@@ -567,7 +577,7 @@ for ci = 1:length(zcut_list)
     figure(2*ci); clf;
     set(gcf, 'Position', [100 100 1150 500]);
     error_surface_figure(a, c, cen, phic, zc, tc, dx_show, p, order, bw, ...
-                         dim, thetaex, geo, ufun, ffun, itertol, ...
+                         dim, csex, geo, ufun, ffun, itertol, ...
                          gmres_restart, gmres_maxit, geoname, dkappa);
     outfile = fullfile(figdir, ...
                        sprintf('%s_vgmm_cut_z_%g_errorsurface.png', ...
@@ -847,26 +857,47 @@ function tau = unit_tangent(t, sgn, a, c)
 end
 
 
-function th = glue_angles(tauA, tauB)
-%GLUE_ANGLES  the rotation each branch needs, from the two outward tangents
+function cs = glue_cs(tauA, tauB)
+%GLUE_CS  the rotation each branch needs, from the two outward tangents
 %   tauA and tauB are the outward unit tangents of the two branches at the
 %   cut circle, in the (rho, z) coordinates of a meridian half plane --
 %   outward meaning away from that branch's own surface.  A row of branch A
 %   sitting past the cut lies roughly in the direction tauA from it, and
 %   the glue has to put it where branch B continues, which is the direction
-%   -tauB.  So the rotation is the angle from tauA to -tauB, and the other
-%   branch's is the mirror of that.  On a smooth join tauB = -tauA and both
-%   angles are zero.
+%   -tauB.  So the rotation is the one carrying tauA onto -tauB, and the
+%   other branch's is the mirror of that.  On a smooth join tauB = -tauA
+%   and both rotations are the identity.
+%
+%   cs(k,1) and cs(k,2) are the cosine and sine of branch k's rotation.
+%   The rotation about the cut circle's tangent is planar in the meridian
+%   half plane, so this is the same two-dimensional construction the
+%   ellipse_cut scripts use, and glue_rot2d builds it the same way: by
+%   Rodrigues' formula about the out-of-plane axis, the cosine from a dot
+%   product of the tangents and the sine from their cross product, with no
+%   angle formed and no transcendental evaluated.  See
+%   ../2D_curve/example_ellipse_cut_rotation_construction.m for what that
+%   buys over going through atan2.
 
-  th = [wrapangle(atan2(-tauB(2), -tauB(1)) - atan2(tauA(2), tauA(1))); ...
-        wrapangle(atan2(-tauA(2), -tauA(1)) - atan2(tauB(2), tauB(1)))];
+  cs = zeros(2, 2);
+  [cs(1,1), cs(1,2)] = glue_rot2d(tauA, tauB);
+  [cs(2,1), cs(2,2)] = glue_rot2d(tauB, tauA);
 end
 
 
-function [dk, dkmean] = curvature_mismatch(phic, theta, a, c, flipped)
+function th = cs_angle(cs)
+%CS_ANGLE  the angles of the rotations in cs, for printing only
+%   Nothing the operator applies is computed from these.
+
+  th = atan2(cs(:,2), cs(:,1));
+end
+
+
+function [dk, dkmean] = curvature_mismatch(phic, cs2, a, c, flipped)
 %CURVATURE_MISMATCH  ||II_1 - R II_2 R^T|| at the cut circle
-%   theta is BRANCH 2's glue angle, the rotation that carries its frame onto
-%   branch 1's continuation.
+%   cs2 = [cos sin] of BRANCH 2's glue rotation, the one that carries its
+%   frame onto branch 1's continuation.  It is taken as the pair glue_cs
+%   produced rather than as an angle, so that the R assembled below is the
+%   same matrix the operator applies, bit for bit.
 %
 %   Built, not assumed.  Work at azimuth zero, where a meridian half plane
 %   is the (x, z) plane and the cut circle's tangent -- the rotation axis --
@@ -893,7 +924,7 @@ function [dk, dkmean] = curvature_mismatch(phic, theta, a, c, flipped)
     n2(2) = -n2(2);      % the reflection turns the cap's normal over
   end
 
-  R = [cos(theta) -sin(theta); sin(theta) cos(theta)];
+  R = [cs2(1) -cs2(2); cs2(2) cs2(1)];
   d = norm(n1 - (R*n2.').');
 
   dk = d*sqrt(km^2 + kp^2);
@@ -1087,15 +1118,19 @@ function V = rim_samples(rcut, zcut, cen, dx)
 end
 
 
-function [xr, yr, zr] = rotate_about_rim(s, rows, cen, theta)
+function [xr, yr, zr] = rotate_about_rim(s, rows, cen, cth, sth)
 %ROTATE_ABOUT_RIM  spin clamped nodes about the cut circle's tangent
 %   Row i of rows sits at X_i with closest point V_i on the cut circle.
 %   Because V_i is the closest point of X_i on a circle, X_i - V_i has no
 %   component along the circle's tangent e_th, so the rotation about that
-%   tangent by theta is a planar rotation of (d_rho, d_z) in X_i's own
-%   meridian half plane -- the planar construction, meridian by meridian.
-%   The e_th component is carried through anyway so the formula does not
-%   quietly depend on it vanishing.
+%   tangent through the angle whose cosine is cth and sine sth is a planar
+%   rotation of (d_rho, d_z) in X_i's own meridian half plane -- the planar
+%   construction, meridian by meridian.  The e_th component is carried
+%   through anyway so the formula does not quietly depend on it vanishing.
+%
+%   cth and sth come from glue_cs, which never forms the angle; taking the
+%   pair rather than an angle is what keeps this routine from having to
+%   undo an atan2 with a cos and a sin.
 
   x0 = s.cpx(rows);  y0 = s.cpy(rows);  z0 = s.cpz(rows);
   th0 = atan2(y0 - cen(2), x0 - cen(1));
@@ -1107,8 +1142,8 @@ function [xr, yr, zr] = rotate_about_rim(s, rows, cen, theta)
   dr = ddx.*ct + ddy.*st;      % along e_rho
   dt = -ddx.*st + ddy.*ct;     % along e_th, zero up to rounding
 
-  nr = cos(theta)*dr - sin(theta)*ddz;
-  nz = sin(theta)*dr + cos(theta)*ddz;
+  nr = cth*dr - sth*ddz;
+  nz = sth*dr + cth*ddz;
 
   xr = x0 + nr.*ct - dt.*st;
   yr = y0 + nr.*st + dt.*ct;
@@ -1165,7 +1200,7 @@ function tau = cp_tangent(s, cen, scheme)
 end
 
 
-function sh = shared_points(br, geo, a, c, cen, thetaex)
+function sh = shared_points(br, geo, a, c, cen, csex)
 %SHARED_POINTS  the grid nodes carrying an unknown in BOTH branches
 %   With one band per branch the unknowns are the band itself, stored as
 %   global linear indices, so the overlap is their intersection.  sh.rot
@@ -1200,7 +1235,8 @@ function sh = shared_points(br, geo, a, c, cen, thetaex)
     th{k} = br{k}.th(ii{k});
     m = find(rot{k});
     if ~isempty(m)
-      [xr, yr, zr] = rotate_about_rim(br{k}, ii{k}(m), cen, thetaex(k));
+      [xr, yr, zr] = rotate_about_rim(br{k}, ii{k}(m), cen, ...
+                                      csex(k,1), csex(k,2));
       [qx, qy, qz] = cpcap(xr, yr, zr, a, c, cen, geo{o});
       [ph{k}(m), th{k}(m)] = capparam(qx, qy, qz, a, c, cen, geo{o});
     end
@@ -1210,12 +1246,13 @@ function sh = shared_points(br, geo, a, c, cen, thetaex)
 end
 
 
-function out = vgmm_solve(br, theta, x1d, y1d, z1d, p, dim, a, c, cen, ...
+function out = vgmm_solve(br, cs, x1d, y1d, z1d, p, dim, a, c, cen, ...
                           ufun, ffun, itertol, restart, maxit)
 %VGMM_SOLVE  assemble and solve u - laplacian_S u = f the vGMM way
 %   br is one branch (the uncut surface, the baseline) or two (the glued
 %   pieces).  With two branches, the band nodes clamped to the cut circle
-%   are rotated about it by theta(k) -- k the branch -- and then extended by
+%   are rotated about it by the rotation whose cosine and sine are cs(k,1)
+%   and cs(k,2) -- k the branch -- and then extended by
 %   interpolating on the other branch, which puts their weights in the
 %   off-diagonal block E_{k,o} of the extension.
 %
@@ -1268,7 +1305,7 @@ function out = vgmm_solve(br, theta, x1d, y1d, z1d, p, dim, a, c, cen, ...
     if isempty(rows)
       error('no rows to route across the cut on branch %d', k);
     end
-    [xr, yr, zr] = rotate_about_rim(br{k}, rows, cen, theta(k));
+    [xr, yr, zr] = rotate_about_rim(br{k}, rows, cen, cs(k,1), cs(k,2));
 
     % A wrong rotation can push a row back across the normal plane, and its
     % closest point on the other branch is then clamped to the cut circle
@@ -1471,7 +1508,7 @@ end
 
 
 function error_surface_figure(a, c, cen, phic, zcut, tc, dx, p, order, bw, ...
-                              dim, thetaex, geo, ufun, ffun, itertol, ...
+                              dim, csex, geo, ufun, ffun, itertol, ...
                               restart, maxit, geoname, dkappa)
 %ERROR_SURFACE_FIGURE  the manifold in space, coloured by |u_h - u|
 %   Solves once more at the display grid with the EXACT rotation -- the
@@ -1496,7 +1533,7 @@ function error_surface_figure(a, c, cen, phic, zcut, tc, dx, p, order, bw, ...
     br{j}.rim = rim_rows(br{j}, a, c, cen, rcut, zcut);
   end
   clear xc yc zc
-  out = vgmm_solve(br, thetaex, x1d, y1d, z1d, p, dim, a, c, cen, ...
+  out = vgmm_solve(br, csex, x1d, y1d, z1d, p, dim, a, c, cen, ...
                    ufun, ffun, itertol, restart, maxit);
 
   %% the error field on each branch, over all but a wedge of azimuth
@@ -1640,13 +1677,6 @@ function slopeguides(hvals, base)
        'DisplayName', 'O(dx)');
   plot(hvals, base*(hvals/hvals(1)).^2, 'k--', 'LineWidth', 1.2, ...
        'DisplayName', 'O(dx^2)');
-end
-
-
-function th = wrapangle(th)
-%WRAPANGLE  put an angle into (-pi, pi]
-
-  th = angle(exp(1i*th));
 end
 
 

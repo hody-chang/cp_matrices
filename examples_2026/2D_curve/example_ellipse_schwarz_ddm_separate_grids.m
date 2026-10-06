@@ -155,6 +155,7 @@ addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
 addpath(fullfile(here, '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 
 %% Geometry, conventions, and the manufactured solution
@@ -315,7 +316,11 @@ for ic = 1:ncut
       for isc = 1:numel(SCH)
         gl.(SCH{isc}) = make_glue(sub, SCH{isc}, a, b);
       end
-      dth = max(abs(wrapangle(gl.d_k2.theta(:) - gl.exact.theta(:))));
+      % the angle of the relative rotation R_exact' * R, which is in
+      % (-pi, pi] by construction: no difference of two angles and no
+      % rewrap.  See rot2d_err.
+      dth = max(abs(rot2d_err(gl.d_k2.c(:), gl.d_k2.s(:), ...
+                              gl.exact.c(:), gl.exact.s(:))));
 
       for isc = 1:numel(SCH)
         prep = schwarz_prepare(sub, gl.(SCH{isc}), p);
@@ -850,14 +855,19 @@ end
 %% The rotation glue at the interfaces
 
 function glue = make_glue(sub, scheme, a, b)
-%MAKE_GLUE  the angle each subdomain turns its clamped rows through
-%   glue.theta(e, j) is the rotation subdomain j applies at its end e, with
-%   e = 1 the ta end and e = 2 the tb end.  The angle is a property of the
-%   CURVE at the interface point v, and needs the one-sided tangents of the
-%   two arcs meeting there.  Because the decomposition is non-overlapping and
-%   both interfaces are the cut points, BOTH subdomains end at v and each
-%   supplies its own tangent directly -- the same construction the sibling
-%   ellipse_cut scripts use at a cut point.
+%MAKE_GLUE  the rotation each subdomain turns its clamped rows through
+%   glue.c(e, j) and glue.s(e, j) are the cosine and sine of the rotation
+%   subdomain j applies at its end e, with e = 1 the ta end and e = 2 the tb
+%   end; glue.theta carries the same rotations as angles, for reporting only.
+%   The rotation is a property of the CURVE at the interface point v, and
+%   needs the one-sided tangents of the two arcs meeting there.  Because the
+%   decomposition is non-overlapping and both interfaces are the cut points,
+%   BOTH subdomains end at v and each supplies its own tangent directly --
+%   the same construction the sibling ellipse_cut scripts use at a cut point.
+%
+%   glue_rot2d builds the pair by Rodrigues' formula about the out-of-plane
+%   axis: the cosine is a dot product of the two tangents and the sine their
+%   cross product, so no angle is formed and no transcendental is evaluated.
 %
 %     'exact'  the analytic tangents, with the y component negated on a
 %              reflected piece
@@ -867,7 +877,8 @@ function glue = make_glue(sub, scheme, a, b)
 %   angle is zero; at a corner it is the turning angle of the curve.
 
   N = sub{1}.N;
-  glue.theta = zeros(2, N);
+  glue.c = zeros(2, N);
+  glue.s = zeros(2, N);
   glue.scheme = scheme;
 
   for j = 1:N
@@ -893,10 +904,12 @@ function glue = make_glue(sub, scheme, a, b)
 
       % A row of j sitting past v lies roughly along tau_j from it, and the
       % glue has to put it where the far arc continues, which is -tau_k.
-      glue.theta(e, j) = wrapangle(atan2(-tau_k(2), -tau_k(1)) - ...
-                                   atan2( tau_j(2),  tau_j(1)));
+      [glue.c(e,j), glue.s(e,j)] = glue_rot2d(tau_j, tau_k);
     end
   end
+
+  % reporting only: nothing the operator applies is computed from this
+  glue.theta = atan2(glue.s, glue.c);
 end
 
 
@@ -988,14 +1001,17 @@ function prep = schwarz_prepare(sub, glue, p)
       end
       kk(e) = k;
       sk = sub{k};
-      th = glue.theta(e, j);
+      % the glue pair is applied as it was built; no angle in the loop and
+      % so no cos/sin to undo an atan2 with
+      cc = glue.c(e, j);
+      ss = glue.s(e, j);
 
       % every row at this end is clamped to the same interface point
       v = [sj.cpxout(rows(1)), sj.cpyout(rows(1))];
       ddx = sj.xout(rows) - v(1);
       ddy = sj.yout(rows) - v(2);
-      xr = v(1) + cos(th)*ddx - sin(th)*ddy;
-      yr = v(2) + sin(th)*ddx + cos(th)*ddy;
+      xr = v(1) + cc*ddx - ss*ddy;
+      yr = v(2) + ss*ddx + cc*ddy;
 
       % A wrong glue can push a row back across the normal line, and its
       % closest point on the far side is then clamped to the interface again.
@@ -1541,7 +1557,7 @@ function [kap, dk] = curvature_mismatch(t, yflip2, a, b)
 %   (the cut-and-reflect manifold, a corner).  c1 is branch one's curvature
 %   vector and c2 branch two's in its own embedding; R is the rotation taking
 %   branch one's outward tangent onto the negative of branch two's, the same
-%   angle make_glue applies.
+%   rotation make_glue applies and built the same way.
 %
 %   On the plain ellipse R is the identity and c2 = c1, so dk = 0 exactly.  On
 %   the reflected manifold the join is a mirror image, the two branches carry
@@ -1557,8 +1573,7 @@ function [kap, dk] = curvature_mismatch(t, yflip2, a, b)
   Mref = [1 0; 0 yflip2];
   tau1 = -T;                              % branch one's outward tangent at t
   tau2 = (Mref*T.').';                    % branch two's, in its embedding
-  th = wrapangle(atan2(-tau2(2), -tau2(1)) - atan2(tau1(2), tau1(1)));
-  R = [cos(th) -sin(th); sin(th) cos(th)];
+  [~, ~, R] = glue_rot2d(tau1, tau2);
   dk = norm(Mref*cv.' - R*cv.');
 end
 

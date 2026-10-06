@@ -91,6 +91,7 @@ addpath(here);
 addpath(fullfile(here, '..', '..', 'cp_matrices'));
 addpath(fullfile(here, '..', '..', 'surfaces'));
 addpath(fullfile(here, '..', 'surfaces'));
+addpath(fullfile(here, '..', 'rotations'));
 
 
 %% Parameters
@@ -234,7 +235,10 @@ for ci = 1:length(ycut_list)
   if flipped
     tauex{2}(:,2) = -tauex{2}(:,2);
   end
-  thetaex = glue_angles(tauex{1}, tauex{2});
+  % the glue is stored as the (cos, sin) pair Rodrigues' formula gives,
+  % never as an angle; thetaex is derived from it for the report only
+  csex = glue_cs(tauex{1}, tauex{2});
+  thetaex = cs_angle(csex);
 
   Rerr = nan(2, nh);        % max ||R(theta) - R(theta_exact)||_2
   therr = nan(2, nh);       % max |theta - theta_exact|
@@ -272,11 +276,16 @@ for ci = 1:length(ycut_list)
         terr = max([terr norm(tauA(j,:) - tauex{1}(j,:)) ...
                     norm(tauB(j,:) - tauex{2}(j,:))]);
       end
-      dth = wrapangle(glue_angles(tauA, tauB) - thetaex);
-      % ||R(a) - R(b)||_2 = 2|sin((a-b)/2)| for plane rotations, which is
-      % |a - b| to leading order: the matrix error and the angle error
-      % have the same rate, and the matrix one is what gets applied
-      Rerr(scheme,k) = max(max(2*abs(sin(dth/2))));
+      cs = glue_cs(tauA, tauB);
+      % both errors come out of the relative rotation R_exact' * R: the
+      % angle of it, which needs no rewrap, and its 2-norm distance from
+      % the identity, which is 2|sin(dth/2)| evaluated in the branch that
+      % keeps its digits near dth = 0.  See rot2d_err.  The matrix error
+      % and the angle error have the same rate; the matrix one is what
+      % gets applied.
+      [dth, dR] = rot2d_err(cs(:,:,1), cs(:,:,2), ...
+                            csex(:,:,1), csex(:,:,2));
+      Rerr(scheme,k) = max(max(dR));
       therr(scheme,k) = max(max(abs(dth)));
       tanerr(scheme,k) = terr;
     end
@@ -550,23 +559,35 @@ function [cx, cy, dist, bdy] = cpflip(cpf, x, y, yc)
 end
 
 
-function th = glue_angles(tauA, tauB)
-%GLUE_ANGLES  the rotation each half needs, from the two outward tangents
+function cs = glue_cs(tauA, tauB)
+%GLUE_CS  the rotation each half needs, from the two outward tangents
 %   tauA(j,:) and tauB(j,:) are the outward unit tangents of the two
 %   halves at cut point j -- outward meaning away from that half's own
 %   arc.  A row of half A sitting past the cut point lies roughly in the
 %   direction tauA from it, and the glue has to put it where arc B
-%   continues, which is the direction -tauB.  So the rotation is the
-%   angle from tauA to -tauB, and the other half is the mirror of that.
-%   On a smooth join tauB = -tauA and both angles are zero.
+%   continues, which is the direction -tauB.  So the rotation is the one
+%   carrying tauA onto -tauB, and the other half's is the mirror of that.
+%   On a smooth join tauB = -tauA and both rotations are the identity.
+%
+%   cs(k,j,1) and cs(k,j,2) are the cosine and sine of the rotation branch
+%   k applies at cut point j.  They come from glue_rot2d, which is
+%   Rodrigues' formula about the out-of-plane axis: the cosine is a dot
+%   product of the two tangents and the sine their cross product, so no
+%   angle is ever formed and no transcendental is evaluated.
 
-  th = zeros(2, 2);
-  for j = 1:2
-    th(1,j) = wrapangle(atan2(-tauB(j,2), -tauB(j,1)) - ...
-                        atan2( tauA(j,2),  tauA(j,1)));
-    th(2,j) = wrapangle(atan2(-tauA(j,2), -tauA(j,1)) - ...
-                        atan2( tauB(j,2),  tauB(j,1)));
-  end
+  n = size(tauA, 1);
+  cs = zeros(2, n, 2);
+  [c, s] = glue_rot2d(tauA, tauB);
+  cs(1,:,1) = c;  cs(1,:,2) = s;
+  [c, s] = glue_rot2d(tauB, tauA);
+  cs(2,:,1) = c;  cs(2,:,2) = s;
+end
+
+
+function th = cs_angle(cs)
+%CS_ANGLE  the angles of the rotations in cs, for printing only
+
+  th = atan2(cs(:,:,2), cs(:,:,1));
 end
 
 
@@ -864,13 +885,6 @@ function plotconv(hvals, Rerr, rate, tanerr, schemelabels)
   xticks(10.^(-6:1:-1));
   grid on; box on;
   xlabel('dx'); ylabel('error in the glue rotation');
-end
-
-
-function th = wrapangle(th)
-%WRAPANGLE  put an angle into (-pi, pi]
-
-  th = angle(exp(1i*th));
 end
 
 

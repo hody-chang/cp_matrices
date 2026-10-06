@@ -225,7 +225,10 @@ function lev = solve_method(geo, method, P)
       angerr = zeros(numel(rows), 1);
     else
       tc = Rt.cpD(loc, :);
-      angerr = abs(wrap_pi(Rt.phi_dk2(loc) - Rt.phi_exact(loc)));
+      % the angle of the relative rotation, precomputed in
+      % halfTwistedRectTubeBands from the (cos, sin) pairs rather than as a
+      % rewrapped difference of two angles.  See ../rotations/rot2d_err.m.
+      angerr = Rt.angerr_dk2(loc);
       lev.degenerate_source_rows(src) = nnz(Rt.probe(loc));
       lev.signflip_source_rows(src) = nnz(Rt.signflip(loc));
     end
@@ -385,10 +388,6 @@ end
 %% ----------------------------------------------------------------------
 %% Small vector helpers
 %% ----------------------------------------------------------------------
-
-function d = wrap_pi(d)
-  d = mod(d + pi, 2*pi) - pi;
-end
 
 function v = minval(x)
   if (isempty(x)), v = NaN; else, v = min(x); end

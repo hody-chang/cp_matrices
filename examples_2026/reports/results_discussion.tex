@@ -1,0 +1,87 @@
+\subsection{The bound the two tests are read against}
+
+The surface analysis \cite{MMC2026b} gives, for the glued solve,
+\begin{equation}
+  \bigl\| Q_h u_h - u \bigr\|_\infty
+  \;\le\; C\Bigl\{ h^{q} + h^{p-1} + h\,(D + J_2) + h^2
+          + \varepsilon_R + h\,\rho_{f,h} \Bigr\} ,
+  \label{eq:bound}
+\end{equation}
+conditional on a discrete stability assumption. With $q=2$ and $p=3$,
+and with a source-consistent forcing convention, this reads
+\begin{equation}
+  \bigl\| Q_h u_h - u \bigr\|_\infty
+  \;\le\; C\bigl\{ h^2 + h\,(D + J_2) + \varepsilon_R \bigr\} .
+  \label{eq:bound2}
+\end{equation}
+Three constants in \eqref{eq:bound2} decide what the tables can show.
+
+\paragraph{$D$, the extrinsic junction defect.} $D$ is the supremum over
+the junction curve of $|b_2^\perp - b_1^\perp|$, the mismatch of only the
+\emph{mixed} and \emph{transverse} parts $(b_{sr}, b_{rr})$ of the second
+fundamental form in the matched edge frame. On the flipped ellipsoid the
+meridian and the parallel are the principal directions of both branches,
+so $b_{sr}=0$ on both and
+\begin{equation}
+  D = 2\kappa_m .
+\end{equation}
+The along-edge curvature $\kappa_p$ drops out of $D$, because the
+transmission conditions already match $U_{ss}$.
+
+\paragraph{$\dk$, the quantity the tables report.} The ellipsoid script
+reports instead
+\begin{equation}
+  \dk = \bigl\| \mathrm{II}_1 - R\,\mathrm{II}_2 R^{\!\top} \bigr\|_F ,
+\end{equation}
+the full matched-frame mismatch, which \cite{MMC2026b} calls a valid but
+less sharp replacement for $D$. On this family $\dk$ runs 18 to 34 per
+cent above $D$, and it is monotone in the same direction, so ranking the
+cuts by either gives the same order.
+
+The script builds $\dk$ rather than assuming it. Both branches are pieces
+of the same ellipsoid, met at the same $\varphi_c$, so they share
+\begin{equation}
+  \kappa_m = \frac{ac}{G^{3/2}}, \qquad
+  \kappa_p = \frac{c}{a\sqrt{G}}, \qquad
+  G(\varphi) = a^2\cos^2\!\varphi + c^2\sin^2\!\varphi ,
+\end{equation}
+and the mismatch collapses to $|n_1 - Rn_2|\sqrt{\kappa_m^2+\kappa_p^2}$
+with $n$ the inward unit normals. On the \emph{unflipped} cut, $R$ is the
+identity and $n_2=n_1$, so $\dk$ vanishes identically and the glued solve
+should recover the second-order rate of the uncut one. On the
+\emph{flipped} cut, $R$ carries $n_2$ to $-n_1$, so $|n_1-Rn_2|=2$ and
+\begin{equation}
+  \dk = 2\sqrt{\kappa_m^2 + \kappa_p^2}
+  \qquad\text{(flipped)}
+\end{equation}
+at every cut height. It varies only through where on the meridian the cut
+falls.
+
+\paragraph{$J_2$, the intrinsic junction defect.} $J_2$ is
+$[U_{rr}] = (k_2-k_1)U_r - [f]$, with $k_i$ the geodesic curvature of the
+junction curve inside branch $i$. On the flipped ellipsoid it vanishes,
+and \emph{both} of its terms vanish separately. The two branches are
+mirror images across the cut plane, so $k_2=k_1$. And $u$ and $f$ are the
+same functions of $(\varphi,\vartheta)$ on both branches, so $[f]=0$.
+
+That is a different route to $J_2=0$ than the two-sphere example of
+\cite{MMC2026b}, where the two terms are individually nonzero and cancel.
+On the flipped ellipsoid the whole junction defect is therefore
+\emph{extrinsic}, and the bound reads
+\begin{equation}
+  \bigl\| Q_h u_h - u \bigr\|_\infty
+  \;\le\; C\bigl\{ h^2 + h\,D + \varepsilon_R \bigr\} .
+  \label{eq:bound3}
+\end{equation}
+
+\paragraph{$\varepsilon_R$, the rotation error.} This is the term the
+estimated rotations pay and the exact rotation does not. It is the only
+term that separates the three variants of the ellipsoid test, and the
+only term that separates \texttt{exact} from \texttt{dk2} on the tube.
+
+\paragraph{$\rho_{f,h}$, the forcing residual.} This is why both scripts
+take $f$ at the \emph{rotated target} on a routed row. Evaluating the
+forcing on the opposite side without correcting a trace jump can leave
+$\rho_{f,h}=O(1)$ instead of $O(h)$. That would promote $h\rho_{f,h}$
+from $O(h^2)$ to $O(h)$ and put it on a level with the junction term
+itself. It is safe in both tests only because $[f]=0$ by construction.

@@ -1,0 +1,195 @@
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{half_twisted_rectangular_tube_geometry.png}
+\caption{The half-twisted rectangular tube and its two face-pair strips.
+  Left: the complete surface, which is a closed orientable torus. Middle:
+  the wide strip, $p=(s,b)$ with $s\in[-a,a]$. Right: the narrow strip,
+  $p=(a,s)$ with $s\in[-b,b]$. Each strip covers its face pair once over
+  $\theta\in[0,4\pi)$, and each is an annulus, not a M\"obius strip. The
+  red and the blue curve are the two closed corner curves where the
+  strips meet. The cross-section sides are straight, but the faces they
+  sweep are not planar.}
+\label{fig:tubegeom}
+\end{figure}
+
+\subsection{The bands and the routed rows}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{half_twisted_rectangular_tube_narrow_band.png}
+\caption{The two narrow bands at $h=1/22$, and the nodes the glue
+  rotates. Blue dots are the outer band of branch~A, orange rings the
+  outer band of branch~B, and magenta the rows that are routed across a
+  corner curve. A node that lies in both bands carries both markers,
+  because it carries two independent unknowns.}
+\label{fig:tubeband}
+\end{figure}
+
+The routed rows are not a thin shell. Table~\ref{tab:tubesize} gives the
+counts. At every level about one unknown in five is a row whose value is
+supplied by the glue rather than by its own branch. That is the reason
+the junction term in Equation~\eqref{eq:bound} is not a local
+perturbation on this surface: there are two closed junction curves, and
+every one of their neighbourhoods is routed.
+
+\begin{table}[htbp]
+\centering
+\caption{Problem size and solver behaviour, half-twisted rectangular
+  tube. Routed rows are summed over both branches and both corner
+  curves. The row-sum error is $\max_i |\sum_j E_{ij} - 1|$.}
+\label{tab:tubesize}
+\small
+\begin{tabular}{@{}rrrrrrr@{}}
+\toprule
+$h$ & unknowns A & unknowns B & routed rows & GMRES iter
+    & rel.\ residual & row-sum error \\
+\midrule
+0.05000 &  32\,393 & 17\,391 & 21\,029 &  722 & 9.7e-11 & 1.3e-15 \\
+0.04000 &  49\,040 & 25\,556 & 26\,686 &  840 & 9.9e-11 & 1.6e-15 \\
+0.03333 &  68\,599 & 34\,963 & 31\,930 & 1203 & 9.9e-11 & 1.6e-15 \\
+0.02778 &  96\,784 & 48\,138 & 37\,808 & 1544 & 9.9e-11 & 1.6e-15 \\
+0.02273 & 141\,729 & 69\,344 & 46\,307 & 2276 & 1.0e-10 & 1.6e-15 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Convergence of the $\Linf$ error}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{half_twisted_rectangular_tube_rotation_convergence.png}
+\caption{Left: the surface $\Linf$ error of both rotations, with $O(h)$
+  and $O(h^2)$ guides. The two curves lie on top of one another. The
+  error starts between the guides and bends towards $O(h)$ as $h$ falls.
+  Right: the worst $d_{k2}$ rotation angle error, against an $O(h^2)$
+  guide. It falls faster than second order.}
+\label{fig:tubeconv}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{Surface $\Linf$ error of $u$, combined over both strips,
+  half-twisted rectangular tube with $R=1$, $a=0.45$, $b=0.20$. Rates
+  use the actual $h$ ratios.}
+\label{tab:tubeconv}
+\small
+\begin{tabular}{@{}r rr rr r@{}}
+\toprule
+ & \multicolumn{2}{c}{exact rotation}
+ & \multicolumn{2}{c}{$d_{k2}$ rotation}
+ & $d_{k2}$ worst \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+$h$ & error & rate & error & rate & angle error (rad) \\
+\midrule
+1/20 & 1.4041e-01 & --   & 1.4018e-01 & --   & 1.3967e+00 \\
+1/25 & 8.5293e-02 & 2.23 & 8.5201e-02 & 2.23 & 6.7693e-01 \\
+1/30 & 6.3814e-02 & 1.59 & 6.3876e-02 & 1.58 & 2.6388e-01 \\
+1/36 & 5.4570e-02 & 0.86 & 5.4621e-02 & 0.86 & 1.3056e-01 \\
+1/44 & 4.4203e-02 & 1.05 & 4.4186e-02 & 1.06 & 6.2282e-02 \\
+\midrule
+\multicolumn{1}{@{}l}{fitted}
+     & \multicolumn{2}{c}{\textbf{1.429}}
+     & \multicolumn{2}{c}{\textbf{1.426}}
+     & 4.04 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{The fitted rate is 1.43, and it is not an asymptotic order.}
+Table~\ref{tab:tubeconv} gives a least-squares slope of $1.429$ for the
+exact rotation. That number alone is misleading, because the
+level-to-level rates fall steadily:
+\begin{equation*}
+  2.23, \quad 1.59, \quad 0.86, \quad 1.05 .
+\end{equation*}
+The solve starts close to second order on the coarsest pair and settles
+near first order on the finest pairs. Figure~\ref{fig:tubeconv} shows the
+same thing: the error curve starts below the $O(h^2)$ guide and bends
+towards the $O(h)$ guide. The fitted $1.429$ is an average over a range
+in which the rate is still changing, not the order the scheme will hold
+at smaller $h$. The honest statement is that the observed behaviour is
+consistent with a first-order junction term taking over from a
+second-order interior term, which is what Equation~\eqref{eq:bound}
+predicts when $D$ and $J_2$ do not vanish.
+
+Unlike the ellipsoid, this surface has no grid-alignment scatter: the
+error is monotone in $h$ at every level. The two junction curves are not
+plane circles, and the glue angle varies along them, so the signed
+junction residual does not add up to a near cancellation that depends on
+grid position.
+
+\paragraph{Cross-check against the recorded run.} The notes in
+\texttt{angle\_rotation\_glue.md} record a run at
+$h\in\{1/25, 1/30, 1/40\}$. The three levels this study shares with it
+reproduce it to every printed digit: $8.5293\mathrm{e}{-2}$ and
+$6.3814\mathrm{e}{-2}$ for the exact rotation, $8.5201\mathrm{e}{-2}$ and
+$6.3876\mathrm{e}{-2}$ for $d_{k2}$, and the level rate $1.59$ for the
+pair $1/25 \to 1/30$.
+
+\subsection{The estimated rotation costs nothing here}
+
+The two rotations are indistinguishable in the solution. The largest
+relative difference over all five levels is $0.16$ per cent, at the
+coarsest level, and at the finest level the $d_{k2}$ solve is marginally
+the \emph{better} of the two ($4.4186$ against
+$4.4203 \times 10^{-2}$). That is not a real advantage; it is the size
+of the difference.
+
+This holds although the $d_{k2}$ rotation is a poor estimate on the
+coarse grids. Its worst angle error is $1.40$~rad at $h=1/20$, which is
+$80^\circ$ on the worst row. The error falls at a fitted rate of $4.04$,
+with level rates $3.25$, $5.17$, $3.86$ and $3.69$, reaching
+$6.2\times10^{-2}$~rad at the finest level.
+
+\paragraph{How many rows need the fallback probe.} The $d_{k2}$ source
+estimate is re-sampled from the deterministic outward probe
+$c + h\,\eta_s$ whenever the reflected ray is unusable. The counts are
+substantial and they grow with refinement:
+
+\begin{center}
+\small
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+$h$ & probed rows, branch A & probed rows, branch B & sign reversals \\
+\midrule
+1/20 & 2972 & 1789 & 7 \\
+1/25 & 3100 & 2248 & 0 \\
+1/30 & 3000 & 2609 & 0 \\
+1/36 & 3360 & 3107 & 0 \\
+1/44 & 3973 & 3854 & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+So roughly one routed row in six falls back to the probe. The probe is
+placed with the \emph{analytic} conormal, which is why this variant is
+not a geometry-free estimator, as the script states. The seven sign
+reversals at the coarsest level are rows where the long reflected sample
+misjudged which side of the edge it was on.
+
+\subsection{The traces agree at nearly second order}
+
+The two branches agree with each other on the corner curves far better
+than either agrees with the exact solution:
+
+\begin{center}
+\small
+\begin{tabular}{@{}rrr@{}}
+\toprule
+$h$ & $\max|u_A-u_B|$, upper curve & $\max|u_A-u_B|$, lower curve \\
+\midrule
+1/20 & 2.879e-02 & 2.765e-02 \\
+1/25 & 1.610e-02 & 2.123e-02 \\
+1/30 & 1.219e-02 & 1.288e-02 \\
+1/36 & 7.763e-03 & 1.144e-02 \\
+1/44 & 6.412e-03 & 7.186e-03 \\
+\midrule
+\multicolumn{1}{@{}l}{fitted} & \textbf{1.93} & \textbf{1.71} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The trace discrepancy converges at $1.93$ and $1.71$, against $1.43$ for
+the surface error itself, and this is the same pattern the ellipsoid
+shows. The glue transmits consistently across the junction at close to
+second order. What limits the solve is not the transmission.

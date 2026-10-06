@@ -23,18 +23,25 @@ function [pass, str] = test_cpPolygon_cpSquare_compare()
   c = c + 1;
   pass(c) = assertAlmostEqual(cpy1, cpy2);
 
-  warning('two known failures: bug in cpPolygon');
   c = c + 1;
   pass(c) = assertAlmostEqual(sd1, sd2);
 
 
-  % TODO: BUG: something wrong with the signed distance field in cpPolygon
-  [cpx1, cpy1, sd1] = cpPolygon(-2, -1, poly)
-  [cpx2, cpy2, sd2] = cpSquare(-2, -1)
+  % (-2,-1) lies along the line through the bottom edge: the sign of the
+  % signed distance used to come out as zero here.
+  [cpxa, cpya, sda] = cpPolygon(-2, -1, poly);
+  [cpxb, cpyb, sdb] = cpSquare(-2, -1);
   c = c + 1;
-  pass(c) = assertAlmostEqual(sd1, 1);
+  pass(c) = assertAlmostEqual(sda, 1);
   c = c + 1;
-  pass(c) = assertAlmostEqual(sd2, 1);
+  pass(c) = assertAlmostEqual(sdb, 1);
 
-  %pass
-  %keyboard
+  % same square, vertices listed the other way round: the signed
+  % distance must not care about the orientation
+  [cpx3, cpy3, sd3] = cpPolygon(x, y, flipud(poly));
+  c = c + 1;
+  pass(c) = assertAlmostEqual(cpx3, cpx2);
+  c = c + 1;
+  pass(c) = assertAlmostEqual(cpy3, cpy2);
+  c = c + 1;
+  pass(c) = assertAlmostEqual(sd3, sd2);

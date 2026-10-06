@@ -1,0 +1,102 @@
+The question this report answers is: \emph{what convergence rate does the
+$\Linf$ error reach, when the closest point method is combined with an
+angle rotation glue at a surface junction?}
+
+The answer, on both surfaces, is \textbf{between first and second order,
+and closer to first}. Table~\ref{tab:headline} collects it.
+
+\begin{table}[htbp]
+\centering
+\caption{The headline numbers. Every rate is a least-squares slope of
+  $\log\|e\|_\infty$ against $\log h$ over all the levels of that run.}
+\label{tab:headline}
+\small
+\begin{tabular}{@{}llccl@{}}
+\toprule
+test & variant & levels & fitted rate & error at the finest $h$ \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{Flipped cap on an ellipsoid}, $h=0.065
+  \to 0.0241$} \\
+\quad cut $z=0.390$, $\dk=3.07$ & exact $R$     & 6 & 1.26 & 6.44e-03 \\
+\quad cut $z=0.455$, $\dk=2.68$ & exact $R$     & 6 & 1.80 & 5.62e-03 \\
+\quad cut $z=0.520$, $\dk=2.35$ & exact $R$     & 6 & 1.47 & 3.75e-03 \\
+\quad cut $z=0.585$, $\dk=2.07$ & exact $R$     & 6 & 1.23 & 3.24e-03 \\
+\quad cut $z=0.390$, $\dk=3.07$ & \emph{no glue} & 6 & \textbf{0.10}
+  & 2.84e-01 \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{Half-twisted rectangular tube},
+  $h=1/20 \to 1/44$} \\
+\quad both corner curves & exact rotation & 5 & 1.43 & 4.42e-02 \\
+\quad both corner curves & $d_{k2}$ rotation & 5 & 1.43 & 4.42e-02 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{The five findings}
+
+\paragraph{1. The glue is what makes the solve converge.} On the flipped
+ellipsoid, the same closest point method applied to the creased surface
+\emph{without} the glue does not converge at all. Its fitted slope is
+$0.10$ and its error stays near $0.3$ at every grid spacing. The glued
+solve is 44 times more accurate at the same grid spacing, and it
+converges. This is the largest effect in the whole study.
+
+\paragraph{2. Neither surface reaches second order.} Every fitted rate
+lies between $1.2$ and $1.8$. This is what the surface bound predicts
+when the junction defect does not vanish: the term $h\,(D+J_2)$ is first
+order and dominates the $h^2$ interior term. On the tube the
+level-to-level rates fall steadily through the refinement
+($2.23 \to 1.59 \to 0.86 \to 1.05$), so the fitted $1.43$ is an average
+over a range in which the rate is still moving towards first order,
+rather than an order the scheme holds.
+
+\paragraph{3. The glue rotation does not have to be accurate.} The
+rotations built only from closest point differences give the same
+solution as the exact analytic rotation, everywhere in this study. On the
+tube the two agree to $0.16$ per cent at worst, although the estimated
+rotation is wrong by $1.40$~rad ($80^\circ$) on its worst row at the
+coarsest level. On the ellipsoid the three variants agree to within 1 per
+cent at the finest level of every cut. The glue has to be approximately
+right; it does not have to be exact.
+
+\paragraph{4. The transmission is not what limits the solve.} On both
+surfaces the two branches agree with \emph{each other} across the
+junction at a higher rate than either agrees with the exact solution:
+$1.93$ and $1.71$ for the tube's two corner curves against $1.43$ for its
+surface error, and $1.97$ for the ellipsoid's cross-branch gap against
+$1.26$ for its surface error. The glue transmits consistently. The limit
+is the geometry of the junction itself.
+
+\paragraph{5. On the ellipsoid, the error is not a smooth function of
+$h$.} Neighbouring grid spacings differ by a factor of three, and
+level-to-level rates run from $-6.3$ to $+6.8$, while the linear solver
+converges to $10^{-10}$ at every level. The cause is a signed
+cancellation of the junction residual around the cut circle, whose
+outcome depends on where that circle falls between grid planes. Only the
+fitted slope is a rate. The tube does not show this, because its junction
+curves are not plane circles and its glue angle varies along them.
+
+\subsection*{What to be careful about}
+
+\begin{itemize}
+  \item \textbf{The fits are short.} The ellipsoid script's default is
+        ten grid spacings, chosen to average over the scatter in
+        finding~5. The runs here use six, because the finer levels of the
+        default list cost more than the time available. The ellipsoid
+        rates should be read as "first order, not second", not as
+        three-digit numbers. See Section~\ref{sec:scatter}.
+  \item \textbf{The $\dk=0$ control was not run.} The script can place
+        the cut without flipping the cap, which makes the curvature
+        mismatch vanish identically and should recover second order.
+        That run would separate "the crease costs an order" from "the
+        glue costs an order". It is the obvious next step.
+  \item \textbf{The error level orders by $\dk$; the fitted rate does
+        not.} The four cut heights give rates $1.26$, $1.80$, $1.47$ and
+        $1.23$, which are not monotone in $\dk$. The errors at a fixed
+        grid spacing are monotone. See Section~\ref{sec:dkappa}.
+  \item \textbf{A bug blocks the script as committed.}
+        \texttt{error\_surface\_figure} uses \texttt{thetaex}, which is
+        never passed to it, so the ellipsoid script aborts after its
+        first cut whenever \texttt{z\_3d} is not empty. The runs here use
+        a copy with that argument added. See Section~\ref{sec:repro}.
+\end{itemize}

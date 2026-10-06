@@ -1163,23 +1163,36 @@ function R = cusp_rotation_min(tau_s, tau_t, n_s)
 
   target = -tau_t;
 
+  % Rodrigues' formula needs the sine and cosine of the angle, not the
+  % angle: with tau_s and target unit, the cross product's length IS the
+  % sine and their dot product IS the cosine.  Going through
+  % angle = atan2(norm_a, dot(...)) and then cos/sin of that is a round
+  % trip through three library transcendentals that cancel each other,
+  % and it costs accuracy -- see ../rotations/rot2d_from_to.m, and
+  % ../2D_curve/example_ellipse_cut_rotation_construction.m for the
+  % measured difference in the planar case.
   a = cross(tau_s, target);
   norm_a = norm(a);
 
   if norm_a > 1e-12
     axis = a / norm_a;
-    angle = atan2(norm_a, dot(tau_s, target));
+    c = dot(tau_s, target);
+    s = norm_a;
+    % the inputs are unit only to within rounding, so normalize the pair
+    nrm = hypot(c, s);
+    c = c / nrm;
+    s = s / nrm;
   elseif dot(tau_s, target) > 0
     R = eye(3);
     return;
   else
-    angle = pi;
+    % a half turn about any axis perpendicular to tau_s
+    c = -1;
+    s = 0;
     axis = cross(tau_s, n_s);
     axis = axis / norm(axis);
   end
 
-  c = cos(angle);
-  s = sin(angle);
   axis_x = [0 -axis(3) axis(2); axis(3) 0 -axis(1); -axis(2) axis(1) 0];
   R = eye(3) + s*axis_x + (1-c)*axis_x*axis_x;
 end
