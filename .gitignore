@@ -23,6 +23,14 @@ python/build
 *.tar.gz
 *.zip
 
+# Local-only reports and Markdown documents (at any directory depth)
+reports/
+*.md
+*.markdown
+*.mdown
+*.mkd
+*.mdx
+
 # Local agent files
 .agnets
 .codex
