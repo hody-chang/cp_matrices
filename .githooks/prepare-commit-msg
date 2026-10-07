@@ -1,0 +1,12 @@
+#!/bin/sh
+# Enable in each clone with: git config core.hooksPath .githooks
+# Strip only the unwanted Claude Opus 5 co-author trailer; preserve other authors.
+set -eu
+
+message=$1
+filtered=$(mktemp)
+trap 'rm -f "$filtered"' EXIT
+trap 'exit 1' HUP INT TERM
+
+awk 'tolower($0) !~ /^[[:space:]]*co-authored-by:[[:space:]]*claude opus 5[[:space:]]*<noreply@anthropic[.]com>[[:space:]]*$/' "$message" > "$filtered"
+cat "$filtered" > "$message"
